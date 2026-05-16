@@ -15,9 +15,10 @@ import {
   checkType,
   isMobile,
   isTouchDevice,
+  calculateNetworkQuality,
 } from "../../utils/index";
-import webGroupRtc from "./webGroupRtc";
-import { VideoElement } from "./videoElement";
+import WebGroupRtc from "./WebGroupRtc";
+import { VideoElement } from "./VideoElement";
 import {
   MediaType,
   TouchType,
@@ -35,6 +36,8 @@ import type {
   TouchInfo,
   ArmcloudRtcOptions,
   ArmcloudCallbacks,
+  RunInformationPayload,
+  ConnectionStateCode,
 } from "../../types/index";
 import { decryptAES } from "../../utils/crypto";
 import { BaseRtc } from "../common/BaseRtc";
@@ -77,7 +80,10 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
   private remotePc: any = null;
   private dataChannel: any;
 
-
+  private poorNetworkCount = 0;
+  private goodNetworkCount = 0;
+  private lastPacketsLost: number | undefined = undefined;
+  private lastPacketsReceived: number | undefined = undefined;
 
   // 运行信息定时器
   private runInfoTimer: any = null;
@@ -110,6 +116,8 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
 
   private stopOperation: boolean = false;
   private videoElement: VideoElement | null = null;
+  private iceFailureCount: number = 0;
+  private maxIceFailures: number = 3;
 
   constructor(
     viewId: string,
@@ -194,6 +202,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
           credential: turnsArr[0].pwd,
         },
       ],
+      iceCandidatePoolSize: 10,
     };
 
     const audioElement = document.createElement("audio");
@@ -851,7 +860,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
       remoteAudio.muted = false;
     }
   }
-  private sendGroupMag(msg: string) {
+  public sendGroupMessage(msg: string) {
     this.groupRtc?.sendMessage?.(
 
       JSON.stringify({
@@ -882,7 +891,11 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
   }
   private createWebGroupRtc(pads: any) {
     const arr = pads?.filter((v: any) => v !== this.remoteUserId);
-    this.groupRtc = new webGroupRtc(this.options, arr, this.callbacks) as IGroupControl;
+    this.groupRtc = new WebGroupRtc(
+      this.options,
+      arr,
+      this.callbacks
+    ) as IGroupControl;
   }
   /** 滚轮事件 */
   private handleVideoWheel(videoDom: HTMLVideoElement) {
@@ -1145,6 +1158,10 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
 
     //  远端接收到流，交给video去播放
     this.remotePc.addEventListener("track", (event: any) => {
+      // 优化延迟：尝试将播放延迟提示设置为 0 以最小化 Jitter Buffer 延迟
+      if ("playoutDelayHint" in event.receiver) {
+        event.receiver.playoutDelayHint = 0;
+      }
       const { remoteVideo: video, remoteAudio: audio } = this.socketParams;
       const mediaType = Number(this.options.mediaType);
       switch (event?.track?.kind) {
@@ -1207,53 +1224,53 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
 
     // 连接状态，其返回值为以下字符串之一：new、connecting、connected、disconnected、failed 或 closed。
     this.remotePc.addEventListener("connectionstatechange", (event: any) => {
-      switch (this.remotePc.connectionState) {
+      const state = this.remotePc.connectionState;
+      let stateCode: ConnectionStateCode = 0;
+
+      switch (state) {
         // 正在连接
         case "new":
+          stateCode = 0;
+          this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_CONNECTING);
+          break;
         case "connecting":
+          stateCode = 2;
           this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_CONNECTING);
           break;
         // 连接成功
         case "connected":
+          stateCode = 3;
+          this.iceFailureCount = 0; // 重置 ICE 失败计数
           this.triggerRecoveryTimeCallback();
           this.callbacks?.onConnectSuccess?.();
           this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_CONNECTED);
-
           break;
         // 断开连接
         case "disconnected":
+          stateCode = 4;
           Logger.info("disconnected", this.remoteUserId);
-
-          this.callbacks?.onConnectFail?.({
-            code: COMMON_CODE.FAIL,
-            msg: "云机连接断开",
-          });
-
           this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_DISCONNECTED);
-
-          this.stopOperations();
+          this.handleIceFailure();
           break;
         // 连接关闭
         case "closed":
+          stateCode = 1;
           Logger.info("rtc closed");
-
           this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_CLOSE);
-
           this.stopOperations();
           break;
         // 连接失败
         case "failed":
+          stateCode = 1;
           Logger.info("failed", this.remoteUserId);
-
-          this.callbacks?.onConnectFail?.({
-            code: COMMON_CODE.FAIL,
-            msg: "云机连接失败",
-          });
-
-          this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_FAILED);
-          this.stopOperations();
+          this.handleIceFailure();
           break;
       }
+
+      this.callbacks?.onConnectionStateChanged?.({
+        state: stateCode,
+        msg: `RTC state: ${state}`,
+      });
     });
 
     // ICE协商错误
@@ -1261,6 +1278,45 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
     //   Logger.info("icecandidateerror", error);
     //   // ICE协商错误处理
     // });
+  }
+
+  /** 处理 ICE 连接失败 */
+  private async handleIceFailure() {
+    if (this.stopOperation) return;
+
+    if (this.iceFailureCount >= this.maxIceFailures) {
+      Logger.error("Max ICE failures reached, stopping operations.");
+      this.callbacks?.onConnectFail?.({
+        code: COMMON_CODE.FAIL,
+        msg: "云机连接失败，重试次数超限",
+      });
+      this.stopOperations();
+      return;
+    }
+
+    this.iceFailureCount++;
+    Logger.info(`ICE failure detected, attempt ${this.iceFailureCount} to restart ICE...`);
+
+    try {
+      // 尝试重新发送 offer 触发 ICE restart
+      const offer = await this.remotePc?.createOffer({ iceRestart: true });
+      if (offer && this.remotePc) {
+        await this.remotePc.setLocalDescription(offer);
+        const offerMsg = {
+          event: WebSocketEventType.SPECIFIED_MSG,
+          targetUserIds: [this.remoteUserId],
+          data: JSON.stringify({
+            key: MessageKey.RE_OFFER,
+            value: JSON.stringify({
+              sdp: offer.sdp,
+            }),
+          }),
+        };
+        this.socket.send(JSON.stringify(offerMsg));
+      }
+    } catch (e) {
+      Logger.error("Failed to restart ICE:", e);
+    }
   }
 
   /** 注册dataChannel事件 */
@@ -1756,17 +1812,41 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
           const currentRoundTripTime = report.currentRoundTripTime || 0;
           rtt = (currentRoundTripTime * 1000).toFixed(2);
         }
+
+        // 计算丢包率 (inbound-rtp)
+        if (report.type === "inbound-rtp" && report.kind === "video") {
+          const packetsLost = report.packetsLost || 0;
+          const packetsReceived = report.packetsReceived || 0;
+
+          if (this.lastPacketsLost !== undefined && this.lastPacketsReceived !== undefined) {
+            const lostDelta = packetsLost - this.lastPacketsLost;
+            const receivedDelta = packetsReceived - this.lastPacketsReceived;
+            const totalDelta = lostDelta + receivedDelta;
+
+            if (totalDelta > 0) {
+              packetLossRate = lostDelta / totalDelta;
+            }
+          }
+          this.lastPacketsLost = packetsLost;
+          this.lastPacketsReceived = packetsReceived;
+        }
       });
-      const remoteStreamStats = {
+
+      const rttNum = parseFloat(rtt);
+      const networkQuality = calculateNetworkQuality(rttNum, packetLossRate);
+
+      const remoteStreamStats: RunInformationPayload = {
         userId: this.options.userId,
         audioStats: null,
         videoStats: {
-          // videoLossRate: packetLossRate, // 视频丢包率
-          rtt, // 客户端到服务端数据传输的往返时延，单位：ms
-          statsInterval: 2000, // 统计间隔。此次统计周期的间隔，单位为 ms 。
+          videoLossRate: packetLossRate, // 视频丢包率
+          rtt: rttNum, // 客户端到服务端数据传输的往返时延，单位：ms
         },
       };
+
+      this.handleAdaptiveOptimization(remoteStreamStats.videoStats);
       this.callbacks?.onRunInformation?.(remoteStreamStats);
+      this.callbacks?.onNetworkQuality?.(networkQuality, networkQuality);
     } catch (error: any) {
       Logger.error("获取统计信息时出错:", error);
       this.callbacks?.onErrorMessage?.({
@@ -1775,6 +1855,42 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
       });
     }
   }
+
+  /**
+   * 根据网络统计自动调整流性能
+   */
+  private handleAdaptiveOptimization(stats: any) {
+    if (this.stopOperation) return;
+    const { videoLossRate, rtt } = stats;
+    const rttNum = parseFloat(rtt);
+
+    // 网络较差 (丢包 > 5% 或 RTT > 400ms)
+    if (videoLossRate > 0.05 || rttNum > 400) {
+      this.poorNetworkCount++;
+      this.goodNetworkCount = 0;
+
+      if (this.poorNetworkCount >= 3) {
+        const { resolution, frameRate, bitrate } = this.options.videoStream;
+        if (bitrate && bitrate > 1) {
+          Logger.info("WebRtc: Network poor, reducing bitrate", { videoLossRate, rtt });
+          this.setStreamConfig({
+            definitionId: resolution || 12,
+            framerateId: frameRate || 2,
+            bitrateId: Math.max(1, (bitrate || 3) - 1),
+          });
+        }
+        this.poorNetworkCount = 0;
+      }
+    } else if (videoLossRate < 0.01 && rttNum < 200) {
+      this.goodNetworkCount++;
+      this.poorNetworkCount = 0;
+
+      if (this.goodNetworkCount >= 10) {
+        this.goodNetworkCount = 0;
+      }
+    }
+  }
+
 
   /** 浏览器是否支持 */
   public isSupported() {
@@ -1795,7 +1911,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
     if (!this.stopOperation) {
       // 重置无操作回收定时器
       if (!notRecycling && this.groupControlSync) {
-        this.sendGroupMag(message);
+        this.sendGroupMessage(message);
         this.triggerRecoveryTimeCallback();
       }
       if (this.dataChannel) await this.dataChannel?.send(message);
@@ -2050,13 +2166,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
         pads: [pads[index]],
         touchType: TouchType.CLIPBOARD,
       });
-      this.groupRtc?.sendMessage?.(
-
-        JSON.stringify({
-          event: WebSocketEventType.BROADCAST_MSG,
-          data: message,
-        })
-      );
+      this.sendGroupMessage(message);
     });
   }
   /** 按顺序发送文本框 */
@@ -2067,13 +2177,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
         pads: [pads[index]],
         touchType: TouchType.INPUT_BOX,
       });
-      this.groupRtc?.sendMessage?.(
-
-        JSON.stringify({
-          event: WebSocketEventType.BROADCAST_MSG,
-          data: message,
-        })
-      );
+      this.sendGroupMessage(message);
     });
   }
   /**

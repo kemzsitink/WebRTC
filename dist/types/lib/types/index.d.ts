@@ -93,7 +93,43 @@ export interface ArmcloudEngineParams {
     /** 回调 */
     callbacks: ArmcloudCallbacks;
 }
+/**
+ * 网络质量等级
+ * 0: 未知
+ * 1: 极好 (RTT < 100ms, 丢包 < 2%)
+ * 2: 好 (RTT < 200ms, 丢包 < 5%)
+ * 3: 一般 (RTT < 400ms, 丢包 < 10%)
+ * 4: 差 (RTT < 800ms, 丢包 < 20%)
+ * 5: 极差 (RTT > 800ms, 丢包 > 20%)
+ * 6: 断开
+ */
 export type NetworkQualityLevel = number;
+export interface VideoRunStats {
+    width?: number;
+    height?: number;
+    videoLossRate: number;
+    rtt: number;
+    receivedKBitrate?: number;
+    decoderOutputFrameRate?: number;
+    codecType?: string;
+    totalRtt?: number;
+}
+export interface AudioRunStats {
+    audioLossRate: number;
+    receivedKBitrate?: number;
+    rtt?: number;
+    jitterBufferDelay?: number;
+    numChannels?: number;
+    receivedSampleRate?: number;
+    concealedSamples?: number;
+    concealmentEvent?: number;
+    codecType?: string;
+}
+export interface RunInformationPayload {
+    userId: string;
+    audioStats: AudioRunStats | null;
+    videoStats: VideoRunStats;
+}
 export type ConnectionStateCode = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 export type AutoplayKind = "video" | "audio" | undefined;
 export type StreamIndex = 0 | 1;
@@ -270,7 +306,7 @@ export interface ArmcloudCallbacks {
     onVideoInit?: (res?: any) => void;
     onVideoError?: (event: VideoErrorEvent) => void;
     onErrorMessage?: (payload: ErrorMessagePayload) => void;
-    onRunInformation?: (stats: any) => void;
+    onRunInformation?: (stats: RunInformationPayload) => void;
     onNetworkQuality?: (uplink: NetworkQualityLevel, downlink: NetworkQualityLevel) => void;
     onProgress?: (payload: ProgressEventPayload) => void;
     onSendUserError?: (event: SendUserErrorEvent) => void;

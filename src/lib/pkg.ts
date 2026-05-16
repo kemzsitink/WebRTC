@@ -414,11 +414,16 @@ class ArmcloudEngine {
   kickItOutRoom(pads = []) {
     if (this.rtcInstance) this.rtcInstance.kickItOutRoom(pads);
   }
-  // 群控同步开关
+  /** 群控同步开关 */
   toggleGroupControlSync(flag: boolean = true) {
     this.rtcInstance?.toggleGroupControlSync?.(flag);
   }
+  /** 发送群控消息 */
+  sendGroupMessage(message: string) {
+    if (this.rtcInstance) this.rtcInstance.sendGroupMessage(message);
+  }
   /** 离开房间 */
+
   async stop() {
     this.axiosSource?.cancel();
     this.axiosSource = null;

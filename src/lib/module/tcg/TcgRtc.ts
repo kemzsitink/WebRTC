@@ -6,6 +6,7 @@ import type {
     ConnectionStateCode,
     EquipmentInfoEvent,
     AdbOutputEvent,
+    RunInformationPayload,
 } from "../../types/index";
 
 import {
@@ -18,7 +19,7 @@ import {
 } from "../../types/index";
 
 import { CloudGamingWebSDK, type AndroidInstance } from "./core/index";
-import { isMobile, isTouchDevice, waitStyleApplied } from "../../utils/index";
+import { isMobile, isTouchDevice, waitStyleApplied, calculateNetworkQuality } from "../../utils/index";
 
 
 import CreateDataChannel, { EventType } from "./module/createDataChannel";
@@ -80,7 +81,8 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
     // 埋点定时器
     private metricsTimer: any = null;
 
-
+    private poorNetworkCount = 0;
+    private goodNetworkCount = 0;
 
     // 旋转方向
     private rotateType: RotateDirection | undefined = undefined;
@@ -197,7 +199,11 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
         return promise;
     }
     /** 群控房间信息 */
-    async sendGroupRoomMessage(message: string) { }
+    public sendGroupMessage(message: string) {
+        if (this.isGroupControl) {
+            this.groupDataChannel?.send(message);
+        }
+    }
 
     /** 获取应用信息 */
     getEquipmentInfo(type: EquipmentInfoType) {
@@ -889,7 +895,22 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
                             });
                         break;
                     case "media_stats":
-                        this.callbacks?.onRunInformation?.({
+                        const videoStats = {
+                            width: data.videoStats.width,
+                            height: data.videoStats.height,
+                            videoLossRate:
+                                data.videoStats.packet_lost / data.videoStats.packet_received,
+                            receivedKBitrate: data.videoStats.bit_rate,
+                            decoderOutputFrameRate: data.videoStats.fps,
+                            rtt: data.videoStats.edge_rtt,
+                            codecType: data.videoStats.codec,
+                            totalRtt: data.videoStats.raw_rtt,
+                        };
+
+                        const networkQuality = calculateNetworkQuality(videoStats.rtt, videoStats.videoLossRate);
+
+                        this.handleAdaptiveOptimization(videoStats);
+                        const runInfo: RunInformationPayload = {
                             userId: this.options.clientId,
                             audioStats: {
                                 audioLossRate:
@@ -903,20 +924,11 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
                                 concealmentEvent: data.audioStats.concealment_events,
                                 codecType: data.audioStats.codec,
                             },
-                            videoStats: {
-                                width: data.videoStats.width,
-                                height: data.videoStats.height,
-                                videoLossRate:
-                                    data.videoStats.packet_lost / data.videoStats.packet_received,
-                                receivedKBitrate: data.videoStats.bit_rate,
-                                decoderOutputFrameRate: data.videoStats.fps,
-                                rtt: data.videoStats.edge_rtt,
-                                codecType: data.videoStats.codec,
-                                totalRtt: data.videoStats.raw_rtt,
-                            },
-                        });
-                        break;
-                    case "autoplay":
+                            videoStats,
+                        };
+                        this.callbacks?.onRunInformation?.(runInfo);
+                        this.callbacks?.onNetworkQuality?.(networkQuality, networkQuality);
+                        break;                    case "autoplay":
                         // 首帧渲染
                         data?.code === 0 &&
                             data?.mediaType === "video" &&
@@ -1448,8 +1460,44 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
     }
 
     /** 远端用户离开房间 */
-    onUserLeave() { }
+    public onUserLeave() { }
+
+    /**
+     * 根据网络统计自动调整流性能
+     */
+    private handleAdaptiveOptimization(stats: any) {
+        const { videoLossRate, rtt } = stats;
+
+        // 网络较差 (丢包 > 5% 或 RTT > 300ms)
+        if (videoLossRate > 0.05 || rtt > 300) {
+            this.poorNetworkCount++;
+            this.goodNetworkCount = 0;
+
+            if (this.poorNetworkCount >= 3) {
+                const { resolution, frameRate, bitrate } = this.options.videoStream;
+                if (bitrate && bitrate > 1) {
+                    Logger.info("TcgRtc: Network poor, reducing bitrate", { videoLossRate, rtt });
+                    this.setStreamConfig({
+                        definitionId: resolution || 12,
+                        framerateId: frameRate || 2,
+                        bitrateId: Math.max(1, (bitrate || 3) - 1),
+                    });
+                }
+                this.poorNetworkCount = 0;
+            }
+        } else if (videoLossRate < 0.01 && rtt < 150) {
+            this.goodNetworkCount++;
+            this.poorNetworkCount = 0;
+
+            if (this.goodNetworkCount >= 10) {
+                // 良好网络下可尝试恢复，此处暂不自动上调以防抖动
+                this.goodNetworkCount = 0;
+            }
+        }
+    }
+
     setViewSize(width: number, height: number, rotateType: 0 | 1 = 0) { }
+
     private getCameraState() {
         this.sendUserMessage(
             this.getMsgTemplate(TouchType.EVENT_SDK, {

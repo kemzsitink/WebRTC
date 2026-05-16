@@ -294,6 +294,23 @@ const nextFrame = () => {
 const copyText = (text) => {
     return copy(text);
 };
+/**
+ * 根据 RTT 和丢包率计算网络质量等级
+ * @param rtt 往返时延 (ms)
+ * @param lossRate 丢包率 (0-1)
+ * @returns 网络质量等级 (1-6)
+ */
+const calculateNetworkQuality = (rtt, lossRate) => {
+    if (rtt > 800 || lossRate > 0.2)
+        return 5;
+    if (rtt > 400 || lossRate > 0.1)
+        return 4;
+    if (rtt > 200 || lossRate > 0.05)
+        return 3;
+    if (rtt > 100 || lossRate > 0.02)
+        return 2;
+    return 1;
+};
 
 class WebGroupRtc {
     params = null; // 传入的参数
@@ -814,6 +831,10 @@ class WebRtc extends BaseRtc {
     retryTime;
     remotePc = null;
     dataChannel;
+    poorNetworkCount = 0;
+    goodNetworkCount = 0;
+    lastPacketsLost = undefined;
+    lastPacketsReceived = undefined;
     // 运行信息定时器
     runInfoTimer = null;
     // 触摸坐标信息
@@ -831,6 +852,8 @@ class WebRtc extends BaseRtc {
     masterIdPrefix = "";
     stopOperation = false;
     videoElement = null;
+    iceFailureCount = 0;
+    maxIceFailures = 3;
     constructor(viewId, params, callbacks) {
         super(viewId, params, callbacks);
         const whileCallList = ["onAutoRecoveryTime"];
@@ -892,6 +915,7 @@ class WebRtc extends BaseRtc {
                     credential: turnsArr[0].pwd,
                 },
             ],
+            iceCandidatePoolSize: 10,
         };
         const audioElement = document.createElement("audio");
         audioElement.id = `${this.masterIdPrefix}_${this.remoteUserId}_remoteAudio`;
@@ -1436,7 +1460,7 @@ class WebRtc extends BaseRtc {
             remoteAudio.muted = false;
         }
     }
-    sendGroupMag(msg) {
+    sendGroupMessage(msg) {
         this.groupRtc?.sendMessage?.(JSON.stringify({
             event: "broadcastMsg" /* WebSocketEventType.BROADCAST_MSG */,
             data: msg,
@@ -1696,6 +1720,10 @@ class WebRtc extends BaseRtc {
         });
         //  远端接收到流，交给video去播放
         this.remotePc.addEventListener("track", (event) => {
+            // 优化延迟：尝试将播放延迟提示设置为 0 以最小化 Jitter Buffer 延迟
+            if ("playoutDelayHint" in event.receiver) {
+                event.receiver.playoutDelayHint = 0;
+            }
             const { remoteVideo: video, remoteAudio: audio } = this.socketParams;
             const mediaType = Number(this.options.mediaType);
             switch (event?.track?.kind) {
@@ -1748,51 +1776,94 @@ class WebRtc extends BaseRtc {
         });
         // 连接状态，其返回值为以下字符串之一：new、connecting、connected、disconnected、failed 或 closed。
         this.remotePc.addEventListener("connectionstatechange", (event) => {
-            switch (this.remotePc.connectionState) {
+            const state = this.remotePc.connectionState;
+            let stateCode = 0;
+            switch (state) {
                 // 正在连接
                 case "new":
+                    stateCode = 0;
+                    this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_CONNECTING);
+                    break;
                 case "connecting":
+                    stateCode = 2;
                     this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_CONNECTING);
                     break;
                 // 连接成功
                 case "connected":
+                    stateCode = 3;
+                    this.iceFailureCount = 0; // 重置 ICE 失败计数
                     this.triggerRecoveryTimeCallback();
                     this.callbacks?.onConnectSuccess?.();
                     this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_CONNECTED);
                     break;
                 // 断开连接
                 case "disconnected":
+                    stateCode = 4;
                     Logger.info("disconnected", this.remoteUserId);
-                    this.callbacks?.onConnectFail?.({
-                        code: COMMON_CODE.FAIL,
-                        msg: "云机连接断开",
-                    });
                     this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_DISCONNECTED);
-                    this.stopOperations();
+                    this.handleIceFailure();
                     break;
                 // 连接关闭
                 case "closed":
+                    stateCode = 1;
                     Logger.info("rtc closed");
                     this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_CLOSE);
                     this.stopOperations();
                     break;
                 // 连接失败
                 case "failed":
+                    stateCode = 1;
                     Logger.info("failed", this.remoteUserId);
-                    this.callbacks?.onConnectFail?.({
-                        code: COMMON_CODE.FAIL,
-                        msg: "云机连接失败",
-                    });
-                    this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_FAILED);
-                    this.stopOperations();
+                    this.handleIceFailure();
                     break;
             }
+            this.callbacks?.onConnectionStateChanged?.({
+                state: stateCode,
+                msg: `RTC state: ${state}`,
+            });
         });
         // ICE协商错误
         // this.remotePc.addEventListener("icecandidateerror", (error) => {
         //   Logger.info("icecandidateerror", error);
         //   // ICE协商错误处理
         // });
+    }
+    /** 处理 ICE 连接失败 */
+    async handleIceFailure() {
+        if (this.stopOperation)
+            return;
+        if (this.iceFailureCount >= this.maxIceFailures) {
+            Logger.error("Max ICE failures reached, stopping operations.");
+            this.callbacks?.onConnectFail?.({
+                code: COMMON_CODE.FAIL,
+                msg: "云机连接失败，重试次数超限",
+            });
+            this.stopOperations();
+            return;
+        }
+        this.iceFailureCount++;
+        Logger.info(`ICE failure detected, attempt ${this.iceFailureCount} to restart ICE...`);
+        try {
+            // 尝试重新发送 offer 触发 ICE restart
+            const offer = await this.remotePc?.createOffer({ iceRestart: true });
+            if (offer && this.remotePc) {
+                await this.remotePc.setLocalDescription(offer);
+                const offerMsg = {
+                    event: "specifiedMsg" /* WebSocketEventType.SPECIFIED_MSG */,
+                    targetUserIds: [this.remoteUserId],
+                    data: JSON.stringify({
+                        key: "re_offer" /* MessageKey.RE_OFFER */,
+                        value: JSON.stringify({
+                            sdp: offer.sdp,
+                        }),
+                    }),
+                };
+                this.socket.send(JSON.stringify(offerMsg));
+            }
+        }
+        catch (e) {
+            Logger.error("Failed to restart ICE:", e);
+        }
     }
     /** 注册dataChannel事件 */
     setupDataChannelEvents() {
@@ -2230,17 +2301,35 @@ class WebRtc extends BaseRtc {
                     const currentRoundTripTime = report.currentRoundTripTime || 0;
                     rtt = (currentRoundTripTime * 1000).toFixed(2);
                 }
+                // 计算丢包率 (inbound-rtp)
+                if (report.type === "inbound-rtp" && report.kind === "video") {
+                    const packetsLost = report.packetsLost || 0;
+                    const packetsReceived = report.packetsReceived || 0;
+                    if (this.lastPacketsLost !== undefined && this.lastPacketsReceived !== undefined) {
+                        const lostDelta = packetsLost - this.lastPacketsLost;
+                        const receivedDelta = packetsReceived - this.lastPacketsReceived;
+                        const totalDelta = lostDelta + receivedDelta;
+                        if (totalDelta > 0) {
+                            packetLossRate = lostDelta / totalDelta;
+                        }
+                    }
+                    this.lastPacketsLost = packetsLost;
+                    this.lastPacketsReceived = packetsReceived;
+                }
             });
+            const rttNum = parseFloat(rtt);
+            const networkQuality = calculateNetworkQuality(rttNum, packetLossRate);
             const remoteStreamStats = {
                 userId: this.options.userId,
                 audioStats: null,
                 videoStats: {
-                    // videoLossRate: packetLossRate, // 视频丢包率
-                    rtt, // 客户端到服务端数据传输的往返时延，单位：ms
-                    statsInterval: 2000, // 统计间隔。此次统计周期的间隔，单位为 ms 。
+                    videoLossRate: packetLossRate, // 视频丢包率
+                    rtt: rttNum, // 客户端到服务端数据传输的往返时延，单位：ms
                 },
             };
+            this.handleAdaptiveOptimization(remoteStreamStats.videoStats);
             this.callbacks?.onRunInformation?.(remoteStreamStats);
+            this.callbacks?.onNetworkQuality?.(networkQuality, networkQuality);
         }
         catch (error) {
             Logger.error("获取统计信息时出错:", error);
@@ -2248,6 +2337,39 @@ class WebRtc extends BaseRtc {
                 code: ERROR_CODE.DATA_CHANNEL,
                 msg: error.message || error.name,
             });
+        }
+    }
+    /**
+     * 根据网络统计自动调整流性能
+     */
+    handleAdaptiveOptimization(stats) {
+        if (this.stopOperation)
+            return;
+        const { videoLossRate, rtt } = stats;
+        const rttNum = parseFloat(rtt);
+        // 网络较差 (丢包 > 5% 或 RTT > 400ms)
+        if (videoLossRate > 0.05 || rttNum > 400) {
+            this.poorNetworkCount++;
+            this.goodNetworkCount = 0;
+            if (this.poorNetworkCount >= 3) {
+                const { resolution, frameRate, bitrate } = this.options.videoStream;
+                if (bitrate && bitrate > 1) {
+                    Logger.info("WebRtc: Network poor, reducing bitrate", { videoLossRate, rtt });
+                    this.setStreamConfig({
+                        definitionId: resolution || 12,
+                        framerateId: frameRate || 2,
+                        bitrateId: Math.max(1, (bitrate || 3) - 1),
+                    });
+                }
+                this.poorNetworkCount = 0;
+            }
+        }
+        else if (videoLossRate < 0.01 && rttNum < 200) {
+            this.goodNetworkCount++;
+            this.poorNetworkCount = 0;
+            if (this.goodNetworkCount >= 10) {
+                this.goodNetworkCount = 0;
+            }
         }
     }
     /** 浏览器是否支持 */
@@ -2263,7 +2385,7 @@ class WebRtc extends BaseRtc {
         if (!this.stopOperation) {
             // 重置无操作回收定时器
             if (!notRecycling && this.groupControlSync) {
-                this.sendGroupMag(message);
+                this.sendGroupMessage(message);
                 this.triggerRecoveryTimeCallback();
             }
             if (this.dataChannel)
@@ -2492,10 +2614,7 @@ class WebRtc extends BaseRtc {
                 pads: [pads[index]],
                 touchType: exports.TouchType.CLIPBOARD,
             });
-            this.groupRtc?.sendMessage?.(JSON.stringify({
-                event: "broadcastMsg" /* WebSocketEventType.BROADCAST_MSG */,
-                data: message,
-            }));
+            this.sendGroupMessage(message);
         });
     }
     /** 按顺序发送文本框 */
@@ -2506,10 +2625,7 @@ class WebRtc extends BaseRtc {
                 pads: [pads[index]],
                 touchType: exports.TouchType.INPUT_BOX,
             });
-            this.groupRtc?.sendMessage?.(JSON.stringify({
-                event: "broadcastMsg" /* WebSocketEventType.BROADCAST_MSG */,
-                data: message,
-            }));
+            this.sendGroupMessage(message);
         });
     }
     /**
@@ -3206,6 +3322,8 @@ class TcgRtc extends BaseRtc {
     groupPads = [];
     // 埋点定时器
     metricsTimer = null;
+    poorNetworkCount = 0;
+    goodNetworkCount = 0;
     // 旋转方向
     rotateType = undefined;
     // 上一次推流分辨率大小
@@ -3286,7 +3404,11 @@ class TcgRtc extends BaseRtc {
         return promise;
     }
     /** 群控房间信息 */
-    async sendGroupRoomMessage(message) { }
+    sendGroupMessage(message) {
+        if (this.isGroupControl) {
+            this.groupDataChannel?.send(message);
+        }
+    }
     /** 获取应用信息 */
     getEquipmentInfo(type) {
         const message = this.getMsgTemplate(exports.TouchType.EQUIPMENT_INFO, {
@@ -3860,7 +3982,19 @@ class TcgRtc extends BaseRtc {
                             });
                         break;
                     case "media_stats":
-                        this.callbacks?.onRunInformation?.({
+                        const videoStats = {
+                            width: data.videoStats.width,
+                            height: data.videoStats.height,
+                            videoLossRate: data.videoStats.packet_lost / data.videoStats.packet_received,
+                            receivedKBitrate: data.videoStats.bit_rate,
+                            decoderOutputFrameRate: data.videoStats.fps,
+                            rtt: data.videoStats.edge_rtt,
+                            codecType: data.videoStats.codec,
+                            totalRtt: data.videoStats.raw_rtt,
+                        };
+                        const networkQuality = calculateNetworkQuality(videoStats.rtt, videoStats.videoLossRate);
+                        this.handleAdaptiveOptimization(videoStats);
+                        const runInfo = {
                             userId: this.options.clientId,
                             audioStats: {
                                 audioLossRate: data.audioStats.packet_lost / data.audioStats.packet_received,
@@ -3873,17 +4007,10 @@ class TcgRtc extends BaseRtc {
                                 concealmentEvent: data.audioStats.concealment_events,
                                 codecType: data.audioStats.codec,
                             },
-                            videoStats: {
-                                width: data.videoStats.width,
-                                height: data.videoStats.height,
-                                videoLossRate: data.videoStats.packet_lost / data.videoStats.packet_received,
-                                receivedKBitrate: data.videoStats.bit_rate,
-                                decoderOutputFrameRate: data.videoStats.fps,
-                                rtt: data.videoStats.edge_rtt,
-                                codecType: data.videoStats.codec,
-                                totalRtt: data.videoStats.raw_rtt,
-                            },
-                        });
+                            videoStats,
+                        };
+                        this.callbacks?.onRunInformation?.(runInfo);
+                        this.callbacks?.onNetworkQuality?.(networkQuality, networkQuality);
                         break;
                     case "autoplay":
                         // 首帧渲染
@@ -4323,6 +4450,37 @@ class TcgRtc extends BaseRtc {
     }
     /** 远端用户离开房间 */
     onUserLeave() { }
+    /**
+     * 根据网络统计自动调整流性能
+     */
+    handleAdaptiveOptimization(stats) {
+        const { videoLossRate, rtt } = stats;
+        // 网络较差 (丢包 > 5% 或 RTT > 300ms)
+        if (videoLossRate > 0.05 || rtt > 300) {
+            this.poorNetworkCount++;
+            this.goodNetworkCount = 0;
+            if (this.poorNetworkCount >= 3) {
+                const { resolution, frameRate, bitrate } = this.options.videoStream;
+                if (bitrate && bitrate > 1) {
+                    Logger.info("TcgRtc: Network poor, reducing bitrate", { videoLossRate, rtt });
+                    this.setStreamConfig({
+                        definitionId: resolution || 12,
+                        framerateId: frameRate || 2,
+                        bitrateId: Math.max(1, (bitrate || 3) - 1),
+                    });
+                }
+                this.poorNetworkCount = 0;
+            }
+        }
+        else if (videoLossRate < 0.01 && rtt < 150) {
+            this.goodNetworkCount++;
+            this.poorNetworkCount = 0;
+            if (this.goodNetworkCount >= 10) {
+                // 良好网络下可尝试恢复，此处暂不自动上调以防抖动
+                this.goodNetworkCount = 0;
+            }
+        }
+    }
     setViewSize(width, height, rotateType = 0) { }
     getCameraState() {
         this.sendUserMessage(this.getMsgTemplate(exports.TouchType.EVENT_SDK, {
@@ -4624,7 +4782,7 @@ class CustomGroupRtc {
     }
     kickItOutRoom(pads) {
         this.pads = this.pads?.filter((v) => !pads?.includes(v)) || [];
-        this.sendRoomMessage(JSON.stringify({
+        this.sendMessage(JSON.stringify({
             touchType: "kickOutUser",
             content: JSON.stringify(pads),
         }));
@@ -4699,7 +4857,7 @@ class CustomGroupRtc {
     async sendUserMessage(userId, message) {
         return await this?.engine?.sendUserMessage(userId, message);
     }
-    async sendRoomMessage(message) {
+    async sendMessage(message) {
         return await this?.engine?.sendRoomMessage(message);
     }
     getMsgTemplate(touchType, content) {
@@ -4723,7 +4881,7 @@ class CustomGroupRtc {
             if (e.message) {
                 const msg = JSON.parse(e.message);
                 if (msg.key === "userjoin") {
-                    this.sendRoomMessage(this.getMsgTemplate("openGroupControl", {
+                    this.sendMessage(this.getMsgTemplate("openGroupControl", {
                         pads: this.pads,
                     }));
                     this.sendUserMessage(e.userId, this.getMsgTemplate("openGroupControl", { isOpen: true }));
@@ -4754,7 +4912,7 @@ class CustomGroupRtc {
             this.onUserJoined();
             this.onUserLeave();
             this.onUserMessageReceived();
-            this.sendRoomMessage(this.getMsgTemplate("openGroupControl", {
+            this.sendMessage(this.getMsgTemplate("openGroupControl", {
                 pads: this.pads,
             }));
             resolve({
@@ -4968,6 +5126,8 @@ class CustomRtc extends BaseRtc {
     rotation = 0;
     // 埋点定时器
     metricsTimer = null;
+    poorNetworkCount = 0;
+    goodNetworkCount = 0;
     rotateType = 0;
     // 摄像头分辨率信息
     cameraResolution = {
@@ -5066,12 +5226,74 @@ class CustomRtc extends BaseRtc {
         });
         /** 用户订阅的远端音/视频流统计信息以及网络状况，统计周期为 2s */
         this.engine.on(VERTC.events.onRemoteStreamStats, (e) => {
-            this.callbacks.onRunInformation?.(e);
+            const stats = {
+                userId: e.uid || e.userId,
+                audioStats: e.audioStats
+                    ? {
+                        audioLossRate: e.audioStats.audioLossRate,
+                        receivedKBitrate: e.audioStats.receivedKBitrate,
+                        rtt: e.audioStats.rtt,
+                        jitterBufferDelay: e.audioStats.jitterBufferDelay,
+                        numChannels: e.audioStats.numChannels,
+                        receivedSampleRate: e.audioStats.receivedSampleRate,
+                        concealedSamples: e.audioStats.concealedSamples,
+                        concealmentEvent: e.audioStats.concealmentEvent,
+                        codecType: e.audioStats.codecType,
+                    }
+                    : null,
+                videoStats: {
+                    width: e.videoStats.width,
+                    height: e.videoStats.height,
+                    videoLossRate: e.videoStats.videoLossRate,
+                    receivedKBitrate: e.videoStats.receivedKBitrate,
+                    decoderOutputFrameRate: e.videoStats.decoderOutputFrameRate,
+                    rtt: e.videoStats.rtt,
+                    codecType: e.videoStats.codecType,
+                    totalRtt: e.videoStats.totalRtt,
+                },
+            };
+            this.callbacks.onRunInformation?.(stats);
         });
         /** 加入房间后，会以每2秒一次的频率，收到本端上行及下行的网络质量信息。 */
         this.engine.on(VERTC.events.onNetworkQuality, (uplinkNetworkQuality, downlinkNetworkQuality) => {
+            this.handleAdaptiveOptimization(downlinkNetworkQuality);
             this.callbacks.onNetworkQuality?.(uplinkNetworkQuality, downlinkNetworkQuality);
         });
+    }
+    /**
+     * 根据网络质量自动调整流性能
+     * @param quality 网络质量等级 (1-6, 1最好, 6最差)
+     */
+    handleAdaptiveOptimization(quality) {
+        if (this.options.disable)
+            return;
+        // 网络较差 (4: 差, 5: 极差, 6: 失去连接)
+        if (quality >= 4) {
+            this.poorNetworkCount++;
+            this.goodNetworkCount = 0;
+            if (this.poorNetworkCount >= 3 && this.rotateType !== -1) { // 借用 rotateType 做标记或增加新状态
+                // 降低码率
+                const { resolution, frameRate, bitrate } = this.options.videoStream;
+                if (bitrate && bitrate > 1) {
+                    Logger.info("Network poor, reducing bitrate");
+                    this.setStreamConfig({
+                        definitionId: resolution || 12,
+                        framerateId: frameRate || 2,
+                        bitrateId: Math.max(1, (bitrate || 3) - 1),
+                    }, true);
+                }
+                this.poorNetworkCount = 0;
+            }
+        }
+        else if (quality <= 2) {
+            // 网络良好
+            this.goodNetworkCount++;
+            this.poorNetworkCount = 0;
+            if (this.goodNetworkCount >= 10) {
+                // 尝试恢复码率 (TODO: 记录原始码率)
+                this.goodNetworkCount = 0;
+            }
+        }
     }
     // 创建群控实例
     async createGroupEngine(pads = [], config) {
@@ -5116,7 +5338,7 @@ class CustomRtc extends BaseRtc {
                 pads: [pads[index]],
                 touchType: exports.TouchType.INPUT_BOX,
             });
-            this.groupRtc?.sendRoomMessage?.(message);
+            this.groupRtc?.sendMessage?.(message);
         });
     }
     /**  群控剪切板  */
@@ -5127,7 +5349,7 @@ class CustomRtc extends BaseRtc {
                 pads: [pads[index]],
                 touchType: exports.TouchType.CLIPBOARD,
             });
-            this.groupRtc?.sendRoomMessage?.(message);
+            this.groupRtc?.sendMessage?.(message);
         });
     }
     /** 手动开启音视频流播放 */
@@ -5136,8 +5358,8 @@ class CustomRtc extends BaseRtc {
             this.engine.play(this.options.clientId);
     }
     /** 群控房间信息 */
-    async sendGroupRoomMessage(message) {
-        return await this?.groupRtc?.sendRoomMessage?.(message);
+    async sendGroupMessage(message) {
+        return await this?.groupRtc?.sendMessage?.(message);
     }
     /** 获取应用信息 */
     getEquipmentInfo(type) {
@@ -5317,7 +5539,7 @@ class CustomRtc extends BaseRtc {
             this.triggerRecoveryTimeCallback();
             !notSendInGroups &&
                 this.groupControlSync &&
-                this.sendGroupRoomMessage(message);
+                this.sendGroupMessage(message);
             return await this.engine?.sendUserMessage(userId, message);
         }
         catch (error) {
@@ -6961,9 +7183,14 @@ class ArmcloudEngine {
         if (this.rtcInstance)
             this.rtcInstance.kickItOutRoom(pads);
     }
-    // 群控同步开关
+    /** 群控同步开关 */
     toggleGroupControlSync(flag = true) {
         this.rtcInstance?.toggleGroupControlSync?.(flag);
+    }
+    /** 发送群控消息 */
+    sendGroupMessage(message) {
+        if (this.rtcInstance)
+            this.rtcInstance.sendGroupMessage(message);
     }
     /** 离开房间 */
     async stop() {

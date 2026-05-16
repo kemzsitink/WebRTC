@@ -1,10 +1,10 @@
 import { Logger } from "../../utils/logger";
 import { type IRTCEngine, StreamIndex } from "@volcengine/rtc";
 
-import customGroupRtc from "./customGroupRtc";
+import CustomGroupRtc from "./CustomGroupRtc";
 import VERTC from "@volcengine/rtc";
 import Shake from "../../common/shake";
-import type { CustomDefinition, TouchInfo } from "../../types/index";
+import type { CustomDefinition, TouchInfo, RunInformationPayload } from "../../types/index";
 import { KeyboardMode } from "../../types/index";
 import { generateTouchCoord } from "../../common/mixins";
 import { isMobile, isTouchDevice, copyText } from "../../utils/index";
@@ -73,10 +73,8 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
   // 埋点定时器
   private metricsTimer: any = null;
 
-
-
-
-
+  private poorNetworkCount = 0;
+  private goodNetworkCount = 0;
 
   private rotateType: number = 0;
 
@@ -208,14 +206,41 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
     });
 
     /** 用户订阅的远端音/视频流统计信息以及网络状况，统计周期为 2s */
-    this.engine.on(VERTC.events.onRemoteStreamStats, (e) => {
-      this.callbacks.onRunInformation?.(e);
+    this.engine.on(VERTC.events.onRemoteStreamStats, (e: any) => {
+      const stats: RunInformationPayload = {
+        userId: e.uid || e.userId,
+        audioStats: e.audioStats
+          ? {
+              audioLossRate: e.audioStats.audioLossRate,
+              receivedKBitrate: e.audioStats.receivedKBitrate,
+              rtt: e.audioStats.rtt,
+              jitterBufferDelay: e.audioStats.jitterBufferDelay,
+              numChannels: e.audioStats.numChannels,
+              receivedSampleRate: e.audioStats.receivedSampleRate,
+              concealedSamples: e.audioStats.concealedSamples,
+              concealmentEvent: e.audioStats.concealmentEvent,
+              codecType: e.audioStats.codecType,
+            }
+          : null,
+        videoStats: {
+          width: e.videoStats.width,
+          height: e.videoStats.height,
+          videoLossRate: e.videoStats.videoLossRate,
+          receivedKBitrate: e.videoStats.receivedKBitrate,
+          decoderOutputFrameRate: e.videoStats.decoderOutputFrameRate,
+          rtt: e.videoStats.rtt,
+          codecType: e.videoStats.codecType,
+          totalRtt: e.videoStats.totalRtt,
+        },
+      };
+      this.callbacks.onRunInformation?.(stats);
     });
 
     /** 加入房间后，会以每2秒一次的频率，收到本端上行及下行的网络质量信息。 */
     this.engine.on(
       VERTC.events.onNetworkQuality,
       (uplinkNetworkQuality: number, downlinkNetworkQuality: number) => {
+        this.handleAdaptiveOptimization(downlinkNetworkQuality);
         this.callbacks.onNetworkQuality?.(
           uplinkNetworkQuality,
           downlinkNetworkQuality
@@ -224,9 +249,47 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
     );
   }
 
+  /**
+   * 根据网络质量自动调整流性能
+   * @param quality 网络质量等级 (1-6, 1最好, 6最差)
+   */
+  private handleAdaptiveOptimization(quality: number) {
+    if (this.options.disable) return;
+    
+    // 网络较差 (4: 差, 5: 极差, 6: 失去连接)
+    if (quality >= 4) {
+      this.poorNetworkCount++;
+      this.goodNetworkCount = 0;
+      
+      if (this.poorNetworkCount >= 3 && this.rotateType !== -1) { // 借用 rotateType 做标记或增加新状态
+        // 降低码率
+        const { resolution, frameRate, bitrate } = this.options.videoStream;
+        if (bitrate && bitrate > 1) {
+          Logger.info("Network poor, reducing bitrate");
+          this.setStreamConfig({
+            definitionId: resolution || 12,
+            framerateId: frameRate || 2,
+            bitrateId: Math.max(1, (bitrate || 3) - 1),
+          }, true);
+        }
+        this.poorNetworkCount = 0;
+      }
+    } else if (quality <= 2) {
+      // 网络良好
+      this.goodNetworkCount++;
+      this.poorNetworkCount = 0;
+      
+      if (this.goodNetworkCount >= 10) {
+        // 尝试恢复码率 (TODO: 记录原始码率)
+        this.goodNetworkCount = 0;
+      }
+    }
+  }
+
+
   // 创建群控实例
   async createGroupEngine(pads = [], config?: any) {
-    this.groupRtc = new customGroupRtc(
+    this.groupRtc = new CustomGroupRtc(
       { ...this.options, ...config },
       pads,
       this.callbacks
@@ -273,7 +336,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
         pads: [pads[index]],
         touchType: TouchType.INPUT_BOX,
       });
-      this.groupRtc?.sendRoomMessage?.(message);
+      this.groupRtc?.sendMessage?.(message);
 
     });
   }
@@ -285,7 +348,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
         pads: [pads[index]],
         touchType: TouchType.CLIPBOARD,
       });
-      this.groupRtc?.sendRoomMessage?.(message);
+      this.groupRtc?.sendMessage?.(message);
 
     });
   }
@@ -294,8 +357,8 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
     if (this.engine) this.engine.play(this.options.clientId);
   }
   /** 群控房间信息 */
-  async sendGroupRoomMessage(message: string) {
-    return await this?.groupRtc?.sendRoomMessage?.(message);
+  public async sendGroupMessage(message: string) {
+    return await this?.groupRtc?.sendMessage?.(message);
 
   }
 
@@ -532,7 +595,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
 
       !notSendInGroups &&
         this.groupControlSync &&
-        this.sendGroupRoomMessage(message);
+        this.sendGroupMessage(message);
 
       return await this.engine?.sendUserMessage(userId, message);
     } catch (error: any) {

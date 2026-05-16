@@ -53,7 +53,10 @@ declare class ArmcloudEngine {
     joinGroupRoom(pads?: never[]): void;
     /** 踢出群控房间 */
     kickItOutRoom(pads?: never[]): void;
+    /** 群控同步开关 */
     toggleGroupControlSync(flag?: boolean): void;
+    /** 发送群控消息 */
+    sendGroupMessage(message: string): void;
     /** 离开房间 */
     stop(): Promise<void | undefined>;
     /**

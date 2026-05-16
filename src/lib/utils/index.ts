@@ -74,3 +74,17 @@ export function debounce<T extends (...args: any[]) => void>(
 export const copyText = (text: string) => {
   return copy(text)
 }
+
+/**
+ * 根据 RTT 和丢包率计算网络质量等级
+ * @param rtt 往返时延 (ms)
+ * @param lossRate 丢包率 (0-1)
+ * @returns 网络质量等级 (1-6)
+ */
+export const calculateNetworkQuality = (rtt: number, lossRate: number): number => {
+  if (rtt > 800 || lossRate > 0.2) return 5;
+  if (rtt > 400 || lossRate > 0.1) return 4;
+  if (rtt > 200 || lossRate > 0.05) return 3;
+  if (rtt > 100 || lossRate > 0.02) return 2;
+  return 1;
+};

@@ -23,7 +23,7 @@ class CustomGroupRtc implements IGroupControl {
   }
   kickItOutRoom(pads: Array<string>) {
     this.pads = this.pads?.filter((v: string) => !pads?.includes(v)) || [];
-    this.sendRoomMessage(
+    this.sendMessage(
       JSON.stringify({
         touchType: "kickOutUser",
         content: JSON.stringify(pads),
@@ -109,7 +109,7 @@ class CustomGroupRtc implements IGroupControl {
     return await this?.engine?.sendUserMessage(userId, message);
   }
 
-  async sendRoomMessage(message: string) {
+  async sendMessage(message: string) {
     return await this?.engine?.sendRoomMessage(message);
   }
 
@@ -136,7 +136,7 @@ class CustomGroupRtc implements IGroupControl {
       if (e.message) {
         const msg = JSON.parse(e.message);
         if (msg.key === "userjoin") {
-          this.sendRoomMessage(
+          this.sendMessage(
             this.getMsgTemplate("openGroupControl", {
               pads: this.pads,
             })
@@ -179,7 +179,7 @@ class CustomGroupRtc implements IGroupControl {
       this.onUserJoined();
       this.onUserLeave();
       this.onUserMessageReceived();
-      this.sendRoomMessage(
+      this.sendMessage(
         this.getMsgTemplate("openGroupControl", {
           pads: this.pads,
         })

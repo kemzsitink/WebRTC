@@ -181,6 +181,7 @@ export abstract class BaseRtc implements IRtcInstance {
   abstract startMediaStream(mediaType: MediaType): Promise<any> | void;
   abstract stopMediaStream(mediaType: MediaType): Promise<any> | void;
   abstract injectVideoStream(type: MessageKey.START_INJECTION_VIDEO | MessageKey.STOP_INJECTION_VIDEO, options?: any, timeout?: number, forwardOff?: boolean): Promise<any> | any;
+  abstract sendGroupMessage(message: string): void;
   abstract sendShakeInfo(time?: number): void;
   abstract getRotateType(): RotateDirection | number | undefined;
 }

@@ -86,6 +86,7 @@ export interface IRtcInstance {
     timeout?: number,
     forwardOff?: boolean
   ): Promise<any> | any;
+  sendGroupMessage(message: string): void;
   sendShakeInfo(time?: number): void;
   getRotateType(): RotateDirection | number | undefined;
 }
