@@ -28,6 +28,7 @@ export default {
       tsconfig: "./tsconfig.json",
       declaration: true,
       declarationDir: "types/",
+      noEmitOnError: true,
     }),
     json(),
   ],

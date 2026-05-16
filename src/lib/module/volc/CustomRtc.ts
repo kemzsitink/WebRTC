@@ -1,12 +1,14 @@
-import type { IRTCEngine } from "@volcengine/rtc";
+import { type IRTCEngine, StreamIndex } from "@volcengine/rtc";
+
 import customGroupRtc from "./customGroupRtc";
-import VERTC, { StreamIndex } from "@volcengine/rtc";
+import VERTC from "@volcengine/rtc";
 import Shake from "../../common/shake";
 import type { CustomDefinition, TouchInfo } from "../../types/index";
 import { KeyboardMode } from "../../types/index";
 import { generateTouchCoord } from "../../common/mixins";
-import { isMobile, isTouchDevice, debounce, copyText } from "../../utils/index";
-import { addInputElement } from "../../common/textInput";
+import { isMobile, isTouchDevice, copyText } from "../../utils/index";
+
+
 import ScreenshotOverlay from "../../common/screenshotOverlay";
 import {
   MetricsReporter,
@@ -20,15 +22,14 @@ import {
   TouchType,
   MediaOperationType,
 } from "../../types/webrtcType";
-class customRtc {
-  // 初始外部H5传入DomId
-  private initDomId: string = "";
-  // video容器id
-  private videoDomId: string = "";
-  // 鼠标、触摸事件时是否按下
-  private hasPushDown: boolean = false;
-  private enableMicrophone: boolean = true;
-  private enableCamera: boolean = true;
+
+import { BaseRtc } from "../common/BaseRtc";
+import { IRtcInstance } from "../../types/rtcInterface";
+import { IGroupControl } from "../../types/groupControlInterface";
+
+
+export default class CustomRtc extends BaseRtc implements IRtcInstance {
+
   private screenShotInstance: ScreenshotOverlay | null = null;
   private isFirstRotate: boolean = false;
   private metricsReporter: MetricsReporter | null = null;
@@ -55,15 +56,15 @@ class customRtc {
   private touchInfo: TouchInfo = generateTouchCoord();
   // 模拟触摸
   private simulateTouchInfo: TouchInfo = generateTouchCoord();
-  private options: any;
+
 
   // 群控同步
   private groupControlSync: boolean = true;
 
   private engine: IRTCEngine | null = null;
   private groupEngine: IRTCEngine | null = null;
-  private groupRtc: any | null = null;
-  private inputElement: HTMLInputElement | null = null;
+
+
 
   // 当前推流状态promise 缓存
   private promiseMap: any = {
@@ -87,8 +88,7 @@ class customRtc {
   public firstFrameCount: number = 0;
   public rotation: number = 0;
 
-  // 是否群控
-  public isGroupControl: boolean = false;
+
 
   // 埋点定时器
   private metricsTimer: any = null;
@@ -111,15 +111,12 @@ class customRtc {
     7: "previous",
   };
 
-  // 回调函数集合
-  public callbacks: any = {};
 
-  public remoteUserId: string = "";
+
+
   private rotateType: number = 0;
-  private videoDeviceId: string = "";
-  private audioDeviceId: string = "";
-  private isCameraInject: boolean = false;
-  private isMicrophoneInject: boolean = false;
+
+
 
   // 摄像头分辨率信息
   private cameraResolution: {
@@ -131,10 +128,8 @@ class customRtc {
   };
 
   constructor(viewId: string, params: any, callbacks: any) {
+    super(viewId, params, callbacks);
     const { masterIdPrefix, padCode } = params;
-    this.initDomId = viewId;
-    this.options = params;
-    this.callbacks = callbacks;
     this.remoteUserId = params.padCode;
     this.enableMicrophone = params.enableMicrophone;
     this.enableCamera = params.enableCamera;
@@ -144,17 +139,13 @@ class customRtc {
     // 获取外部容器div元素
     const h5Dom = document.getElementById(this.initDomId);
 
-    // 创建一个id为armcloudVideo的新的div元素
-    const newDiv = document.createElement("div");
-    const divId = `${masterIdPrefix}_${padCode}_armcloudVideo`;
-    newDiv.setAttribute("id", divId);
-    this.videoDomId = divId;
-    // 将div元素添加到外部容器中
-    h5Dom?.appendChild(newDiv);
+    // 创建并添加 video 容器
+    const videoContainer = this.createVideoContainer(padCode, masterIdPrefix);
 
     // 创建引擎对象
     this.createEngine();
   }
+
 
   /** 浏览器是否支持 */
 
@@ -217,7 +208,7 @@ class customRtc {
     this.autoRecoveryTimer = setTimeout(() => {
       console.log("触发无操作回收了");
       this.stop();
-      this.callbacks.onAutoRecoveryTime();
+      this.callbacks.onAutoRecoveryTime?.();
     }, this.options.autoRecoveryTime * 1000);
   }
 
@@ -241,12 +232,9 @@ class customRtc {
   }
   /** 调用 createEngine 创建一个本地 Engine 引擎对象 */
   async createEngine() {
-    if (!this.inputElement) {
-      // 若不存在inputElement， 则创建一个隐藏的input输入框
-      if (!this.options.disable && !this.options.disableLocalIME) {
-        addInputElement(this);
-      }
-    }
+    if (this.options.disable) return;
+    this.inputService.initIme(this.initDomId, { disableLocalIME: this.options.disableLocalIME });
+
     this.engine = VERTC.createEngine(this.options.appId);
 
     VERTC.setParameter("ICE_CONFIG_REQUEST_URLS", [
@@ -267,24 +255,24 @@ class customRtc {
 
     /** 监听失败回调 */
     this.engine.on(VERTC.events.onError, (error) => {
-      this.callbacks.onErrorMessage(error);
+      this.callbacks.onErrorMessage?.(error);
     });
 
     /** 监听播放失败回调 */
     this.engine.on(VERTC.events.onAutoplayFailed, (e) => {
-      this.callbacks.onAutoplayFailed(e);
+      this.callbacks.onAutoplayFailed?.(e);
     });
 
     /** 用户订阅的远端音/视频流统计信息以及网络状况，统计周期为 2s */
     this.engine.on(VERTC.events.onRemoteStreamStats, (e) => {
-      this.callbacks.onRunInformation(e);
+      this.callbacks.onRunInformation?.(e);
     });
 
     /** 加入房间后，会以每2秒一次的频率，收到本端上行及下行的网络质量信息。 */
     this.engine.on(
       VERTC.events.onNetworkQuality,
       (uplinkNetworkQuality: number, downlinkNetworkQuality: number) => {
-        this.callbacks.onNetworkQuality(
+        this.callbacks.onNetworkQuality?.(
           uplinkNetworkQuality,
           downlinkNetworkQuality
         );
@@ -298,12 +286,16 @@ class customRtc {
       { ...this.options, ...config },
       pads,
       this.callbacks
-    );
+    ) as IGroupControl;
+
     try {
-      const example = await this.groupRtc.getEngine();
-      this.groupEngine = example.engine;
+      const example = await this.groupRtc?.getEngine?.();
+      if (example) {
+        this.groupEngine = example.engine;
+      }
+
     } catch (error: any) {
-      this.callbacks.onGroupControlError({
+      this.callbacks.onGroupControlError?.({
         code: error.code,
         msg: error.message,
       });
@@ -337,7 +329,8 @@ class customRtc {
         pads: [pads[index]],
         touchType: TouchType.INPUT_BOX,
       });
-      this.groupRtc?.sendRoomMessage(message);
+      this.groupRtc?.sendRoomMessage?.(message);
+
     });
   }
   /**  群控剪切板  */
@@ -348,7 +341,8 @@ class customRtc {
         pads: [pads[index]],
         touchType: TouchType.CLIPBOARD,
       });
-      this.groupRtc?.sendRoomMessage(message);
+      this.groupRtc?.sendRoomMessage?.(message);
+
     });
   }
   /** 手动开启音视频流播放 */
@@ -357,14 +351,10 @@ class customRtc {
   }
   /** 群控房间信息 */
   async sendGroupRoomMessage(message: string) {
-    return await this?.groupRtc?.sendRoomMessage(message);
+    return await this?.groupRtc?.sendRoomMessage?.(message);
+
   }
-  getMsgTemplate(touchType: string, content: object) {
-    return JSON.stringify({
-      touchType,
-      content: JSON.stringify(content),
-    });
-  }
+
 
   /** 获取应用信息 */
   getEquipmentInfo(type: "app" | "attr") {
@@ -564,9 +554,9 @@ class customRtc {
 
       const res = await this.startMediaStream(MediaType.VIDEO, msgData);
       
-      this.callbacks.onVideoInit(res.video);
+      this.callbacks.onVideoInit?.(res.video);
     } catch (error) {
-      this.callbacks.onVideoError(error);
+      this.callbacks.onVideoError?.(error as any);
       return Promise.reject(error);
     }
   }
@@ -577,11 +567,11 @@ class customRtc {
       await this.stopMediaStream(MediaType.AUDIO);
 
       const res = await this.startMediaStream(MediaType.AUDIO);
-      this.callbacks.onAudioInit(res.audio);
+      this.callbacks.onAudioInit?.(res.audio);
       this.isMicrophoneInject = true;
       return res.audio;
     } catch (error) {
-      this.callbacks.onAudioError(error);
+      this.callbacks.onAudioError?.(error as any);
       this.isMicrophoneInject = false;
       return Promise.reject(error);
     }
@@ -602,7 +592,7 @@ class customRtc {
 
       return await this.engine?.sendUserMessage(userId, message);
     } catch (error: any) {
-      this.callbacks?.onSendUserError(error);
+      this.callbacks.onSendUserError?.(error);
       return Promise.reject(error);
     }
   }
@@ -747,14 +737,15 @@ class customRtc {
               keyboard === "local";
 
             if (
-              that.inputElement &&
+              that.inputService.getInputElement() &&
               shouldHandleFocus &&
               typeof inputStateIsOpen === "boolean"
             ) {
               inputStateIsOpen
-                ? that.inputElement?.focus()
-                : that.inputElement?.blur();
+                ? that.inputService.focus()
+                : that.inputService.blur();
             }
+
 
             this.touchInfo = generateTouchCoord();
             // 获取节点相对于视口的位置信息
@@ -939,7 +930,7 @@ class customRtc {
           that.onUserPublishStream();
 
           this.startCV();
-          this.callbacks.onConnectSuccess();
+          this.callbacks.onConnectSuccess?.();
         }
 
         /**
@@ -954,7 +945,7 @@ class customRtc {
          * 6 处于 CONNECTION_STATE_DISCONNECTED 状态超过 10 秒，且期间重连未成功。SDK将继续尝试重连
          */
         that.engine?.on(VERTC.events.onConnectionStateChanged, (e) => {
-          that.callbacks.onConnectionStateChanged(e);
+          that.callbacks.onConnectionStateChanged?.(e);
         });
         // that.engine?.on(
         //   VERTC.events.onAudioDeviceStateChanged,
@@ -974,7 +965,7 @@ class customRtc {
         });
         this.metricsReporter?.instant(ReportEventType.FIRST_FRAME);
         console.log("进房错误", error);
-        this.callbacks.onConnectFail({ code: error.code, msg: error.message });
+        this.callbacks.onConnectFail?.({ code: error.code, msg: error.message });
       });
   }
   startCV() {
@@ -1032,7 +1023,7 @@ class customRtc {
     this.engine?.on(VERTC.events.onUserLeave, (res) => {
       console.log("onUserLeave ", res)
       this.disableKeyboardShortcut()
-      this.callbacks.onUserLeave(res);
+      this.callbacks.onUserLeave?.(res);
     });
   }
   setViewSize(width: number, height: number, rotateType: 0 | 1 = 0) {
@@ -1168,7 +1159,7 @@ class customRtc {
           that.onCheckInputState();
           that.setKeyboardStyle(that.options.keyboard);
           that.triggerRecoveryTimeCallback();
-          that.callbacks?.onUserJoined(user);
+          that.callbacks.onUserJoined?.(user);
         }, 300);
       }
     });
@@ -1187,7 +1178,7 @@ class customRtc {
         });
         this.metricsReporter?.instant(ReportEventType.FIRST_FRAME);
       } finally {
-        this.callbacks.onRenderedFirstFrame(event);
+        this.callbacks.onRenderedFirstFrame?.(event);
       }
     });
   }
@@ -1217,7 +1208,8 @@ class customRtc {
       if (videoDomElement && videoDomElement.parentNode) {
         videoDomElement.parentNode.removeChild(videoDomElement);
       }
-      this.inputElement?.remove();
+      // inputService handled in BaseRtc/destroy
+
       this.groupEngine = null;
       this.groupRtc = null;
       this.screenShotInstance = null;
@@ -1294,14 +1286,14 @@ class customRtc {
     // 仅在 enterkeyhint 存在时设置属性
     const enterkeyhintText = this.enterkeyhintObj[msgData.imeOptions as any];
     if (enterkeyhintText) {
-      this.inputElement?.setAttribute("enterkeyhint", enterkeyhintText);
+      this.inputService.getInputElement()?.setAttribute("enterkeyhint", enterkeyhintText);
     }
     // 处理输入框焦点逻辑
     const shouldHandleFocus =
       (allowLocalIMEInCloud && keyboard === "pad") || keyboard === "local";
     
     if (shouldHandleFocus && typeof msgData.isOpen === "boolean") {
-      msgData.isOpen ? this.inputElement?.focus() : this.inputElement?.blur();
+      msgData.isOpen ? this.inputService.focus() : this.inputService.blur();
     }
   }
 
@@ -1315,7 +1307,7 @@ class customRtc {
         const msg = JSON.parse(e.message);
         // 消息透传
         if (msg.key === "message") {
-          this.callbacks.onTransparentMsg(0, msg.data);
+          this.callbacks.onTransparentMsg?.(0, msg.data);
         }
         // ui消息
         if (msg.key === "refreshUiType") {
@@ -1333,7 +1325,7 @@ class customRtc {
           this.initRotateScreen(msgData.width, msgData.height);
         }
         // 云机、本机键盘使用消息
-        if (msg.key === "inputState" && this.inputElement) {
+        if (msg.key === "inputState" && this.inputService.getInputElement()) {
           this.checkInputState(msg);
         }
         // 将云机内容复制到本机剪切板
@@ -1341,7 +1333,7 @@ class customRtc {
           if (this.options.saveCloudClipboard) {
             const msgData = JSON.parse(msg.data);
             copyText(msgData?.content || "")
-            this.callbacks.onOutputClipper(msgData);
+            this.callbacks.onOutputClipper?.(msgData);
           }
         }
       }
@@ -1367,7 +1359,7 @@ class customRtc {
           const result = JSON.parse(callData.data);
           switch (callData.type) {
             case MessageKey.DEFINITION:
-              this.callbacks.onChangeResolution({
+              this.callbacks.onChangeResolution?.({
                 from: parseResolution(result.from),
                 to: parseResolution(result.to),
               });
@@ -1384,7 +1376,7 @@ class customRtc {
                 });
                 this.promiseMap.injectStatus.resolve = null;
               }
-              this.callbacks?.onInjectVideoResult(callData.type, result);
+              this.callbacks.onInjectVideoResult?.(callData.type, result);
               break;
             case MessageKey.INJECTION_VIDEO_STATS:
               const { resolve } = this.promiseMap.streamStatus;
@@ -1395,22 +1387,22 @@ class customRtc {
               });
               break;
             case MessageKey.OPERATE_SWITCH:
-              this.callbacks?.onMonitorOperation(result);
+              this.callbacks.onMonitorOperation?.(result);
               break;
           }
         }
 
         if (msg.key === MessageKey.EQUIPMENT_INFO) {
-          this.callbacks?.onEquipmentInfo(JSON.parse(msg.data || []));
+          this.callbacks.onEquipmentInfo?.(JSON.parse(msg.data || []));
         }
         if (msg.key === MessageKey.INPUT_ADB) {
-          this.callbacks?.onAdbOutput(JSON.parse(msg.data || {}));
+          this.callbacks.onAdbOutput?.(JSON.parse(msg.data || {}));
         }
         // 音视频采集
         if (msg.key === MessageKey.VIDEO_AND_AUDIO_CONTROL) {
           const msgData = JSON.parse(msg.data);
 
-          this.callbacks.onMediaDevicesToggle({
+          this.callbacks.onMediaDevicesToggle?.({
             type: "media",
             enabled: msgData.isOpen,
             isFront: msgData.isFront,
@@ -1438,14 +1430,14 @@ class customRtc {
           }
         }
         // 云机、本机键盘使用消息
-        if (msg.key === MessageKey.INPUT_STATE && this.inputElement) {
+        if (msg.key === MessageKey.INPUT_STATE && this.inputService.getInputElement()) {
           this.checkInputState(msg);
         }
         // 视频采集
         if (msg.key === MessageKey.VIDEO_CONTROL) {
           const msgData = JSON.parse(msg.data);
 
-          this.callbacks.onMediaDevicesToggle({
+          this.callbacks.onMediaDevicesToggle?.({
             type: "camera",
             enabled: msgData.isOpen,
             isFront: msgData.isFront,
@@ -1465,7 +1457,7 @@ class customRtc {
         if (msg.key === MessageKey.AUDIO_CONTROL) {
           const msgData = JSON.parse(msg.data);
 
-          this.callbacks.onMediaDevicesToggle({
+          this.callbacks.onMediaDevicesToggle?.({
             type: "microphone",
             enabled: msgData.isOpen,
           });
@@ -1659,10 +1651,11 @@ class customRtc {
     return this.engine?.unsubscribeStream(this.options.clientId, mediaType);
   }
   /** 截图-保存到本地 */
-  saveScreenShotToLocal() {
+  saveScreenShotToLocal(): Promise<any> {
     const userId = this.options.clientId;
-    return this.engine?.takeRemoteSnapshot(userId, 0);
+    return this.engine?.takeRemoteSnapshot(userId, 0) || Promise.reject("Engine not initialized");
   }
+
 
   /** 截图-保存到云机 */
   saveScreenShotToRemote() {
@@ -1731,7 +1724,7 @@ class customRtc {
   async rotateScreen(type: number) {
     this.rotateType = type;
     try {
-      await this.callbacks?.onBeforeRotate(type);
+      await this.callbacks.onBeforeRotate?.(type);
     } catch (error) {}
 
     // 获取父元素（调用方）的原始宽度和高度，这里要重新获取，因为外层的div可能宽高发生变化
@@ -1817,7 +1810,7 @@ class customRtc {
 
     await this.setRemoteVideoRotation(videoWrapperRotate);
 
-    this.callbacks.onChangeRotate(type, {
+    this.callbacks.onChangeRotate?.(type, {
       width: armcloudVideoWidth,
       height: armcloudVideoHeight,
     });
@@ -2047,4 +2040,4 @@ class customRtc {
   }
 }
 
-export default customRtc;
+

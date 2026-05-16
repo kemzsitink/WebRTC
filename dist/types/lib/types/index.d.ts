@@ -93,7 +93,7 @@ export interface ArmcloudEngineParams {
     /** 回调 */
     callbacks: ArmcloudCallbacks;
 }
-export type NetworkQualityLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+export type NetworkQualityLevel = number;
 export type ConnectionStateCode = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 export type AutoplayKind = "video" | "audio" | undefined;
 export type StreamIndex = 0 | 1;
@@ -141,24 +141,28 @@ export interface ChangeResolutionPayload {
 }
 export interface AutoplayFailedEvent {
     userId?: string;
-    kind: AutoplayKind;
+    kind?: AutoplayKind;
+    [key: string]: any;
 }
-export type RotateTypeNum = 0 | 1;
+export type RotateTypeNum = number;
 export interface RotateInfo {
     width: number;
     height: number;
 }
 export interface AudioErrorEvent {
-    code: number;
+    code?: number | string;
     msg?: string;
+    [key: string]: any;
 }
 export interface VideoErrorEvent {
-    code: number;
+    code?: number | string;
     msg?: string;
+    [key: string]: any;
 }
 export interface ErrorMessagePayload {
-    code: 0 | 1;
+    code?: number | string;
     msg?: string;
+    [key: string]: any;
 }
 export interface RunInformationStats {
     userId: string;
@@ -199,8 +203,9 @@ export interface UserLeaveOrJoinPayload {
     };
 }
 export interface UserLeaveEvent {
-    userId: string;
-    reason: UserLeaveReason;
+    userId?: string;
+    reason?: UserLeaveReason;
+    [key: string]: any;
 }
 export interface UserJoinedPayload {
     userInfo: {
@@ -260,9 +265,9 @@ export interface ArmcloudCallbacks {
     onAutoplayFailed?: (event: AutoplayFailedEvent) => void;
     onBeforeRotate?: (type: RotateTypeNum) => void;
     onChangeRotate?: (type: RotateTypeNum, info: RotateInfo) => void;
-    onAudioInit?: () => void;
+    onAudioInit?: (res?: any) => void;
     onAudioError?: (event: AudioErrorEvent) => void;
-    onVideoInit?: () => void;
+    onVideoInit?: (res?: any) => void;
     onVideoError?: (event: VideoErrorEvent) => void;
     onErrorMessage?: (payload: ErrorMessagePayload) => void;
     onRunInformation?: (stats: any) => void;
@@ -353,6 +358,8 @@ export interface ArmcloudRtcOptions {
     audioDeviceId?: string;
     /** 连接信息 */
     accessInfo?: string;
+    /** 请求 ID */
+    requestId?: string;
 }
 export declare const enum EquipmentInfoType {
     APP = "app",

@@ -1,7 +1,10 @@
 import axios from "axios";
 import type { ArmcloudCallbacks, ArmcloudRtcOptions } from "../../types/index";
+import { IGroupControl } from "../../types/groupControlInterface";
 
-class WebGroupRTC {
+
+class WebGroupRtc implements IGroupControl {
+
   private params: ArmcloudRtcOptions | null = null; // 传入的参数
   private pingTimer: any = null;
   private callbacks: ArmcloudCallbacks | null = null; // 回调函数
@@ -30,6 +33,19 @@ class WebGroupRTC {
     this.socket?.close();
     this.socket = null;
   }
+
+  kickItOutRoom(pads: string[]) {
+    this.sendMessage(
+      JSON.stringify({
+        event: "broadcastMsg",
+        data: JSON.stringify({
+          touchType: "kickOutUser",
+          content: JSON.stringify(pads),
+        }),
+      })
+    );
+  }
+
 
   // 发送消息给 WebSocket 服务端
   sendMessage(message: string) {
@@ -95,7 +111,8 @@ class WebGroupRTC {
   }
 
   // 加入房间
-  joinRoom(pads: any) {
+  joinRoom(pads: any): Promise<any> {
+
     const source = axios.CancelToken.source(); // 创建一个取消令牌
     this.sourceArr.push(source);
     const { userId, videoStream, uuid, token, manageToken } = this.params || {} as ArmcloudRtcOptions;
@@ -104,7 +121,8 @@ class WebGroupRTC {
       ? "/manage/rtc/room/share/applyToken"
       : `/sdk/rtc/open/room/sdk/share/applyToken`;
     const tok = manageToken || token;
-    axios
+    return axios
+
       .post(
         url,
         {
@@ -147,4 +165,5 @@ class WebGroupRTC {
   }
 }
 
-export default WebGroupRTC;
+export default WebGroupRtc;
+

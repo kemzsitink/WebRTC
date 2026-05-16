@@ -1,9 +1,11 @@
 import "webrtc-adapter";
 import axios from "axios";
+import { generateUUID } from "./utils/crypto";
 
-import customRtc from "./module/volc/customRtc";
-import armcloudRtc from "./module/p2p/webRtc";
-import tcgRtc from "./module/tcg/tcgRtc";
+import { RtcFactory } from "./module/common/RtcFactory";
+
+import type { IRtcInstance } from "./types/rtcInterface";
+
 import {
   RotateDirection,
   InjectStreamStatusType,
@@ -24,7 +26,7 @@ class ArmcloudEngine {
   // SDK版本号
   version: string = "1.5.5";
 
-  rtcInstance: customRtc | armcloudRtc | tcgRtc | null = null;
+  rtcInstance: IRtcInstance | null = null;
 
   rtcOptions: ArmcloudRtcOptions | null = null;
 
@@ -74,6 +76,10 @@ class ArmcloudEngine {
     }
 
     // 初始化逻辑
+    this.applyToken(params);
+  }
+
+  private applyToken(params: ArmcloudEngineParams) {
     let uuid = this.rtcOptions?.uuid || "";
 
     if (!uuid) {
@@ -85,18 +91,18 @@ class ArmcloudEngine {
 
     const tokenParams = {
       sdkTerminal: "h5",
-      userId: this.rtcOptions.userId,
-      padCode: this.rtcOptions.padCode,
+      userId: this.rtcOptions!.userId,
+      padCode: this.rtcOptions!.padCode,
       uuid,
       expire: 86400,
-      videoStream: this.rtcOptions.videoStream,
+      videoStream: this.rtcOptions!.videoStream,
     };
 
     axios
       .post(url, tokenParams, {
         headers: {
           "Content-Type": "application/json",
-          token: this.rtcOptions.token,
+          token: this.rtcOptions!.token,
         },
         cancelToken: this.axiosSource.token, // 将取消令牌添加到请求配置中
       })
@@ -112,11 +118,13 @@ class ArmcloudEngine {
             this.rtcOptions!.roomToken = response.data.data.roomToken;
 
             // 创建引擎对象
-            this.rtcInstance = new customRtc(
+            this.rtcInstance = RtcFactory.create(
+              this.streamType!,
               params.viewId,
-              this.rtcOptions,
-              this.callbacks
+              this.rtcOptions!,
+              this.callbacks!
             );
+
             this.callbacks?.onInit?.({
               code: COMMON_CODE.SUCCESS,
               msg: "初始化成功",
@@ -130,11 +138,13 @@ class ArmcloudEngine {
             this.rtcOptions!.turns = response.data.data.turns;
 
             // 创建引擎对象
-            this.rtcInstance = new armcloudRtc(
+            this.rtcInstance = RtcFactory.create(
+              this.streamType!,
               params.viewId,
               this.rtcOptions!,
               this.callbacks!
             );
+
             this.callbacks?.onInit?.({
               code: COMMON_CODE.SUCCESS,
               msg: "初始化成功",
@@ -144,11 +154,13 @@ class ArmcloudEngine {
           } else if (this.streamType == 3) {
             this.rtcOptions!.accessInfo = response.data.data.accessInfo;
             this.rtcOptions!.roomToken = response.data.data.roomToken;
-            this.rtcInstance = new tcgRtc(
+            this.rtcInstance = RtcFactory.create(
+              this.streamType!,
               params.viewId,
               this.rtcOptions!,
               this.callbacks!
             );
+
             console.log(response.data.data);
             this.callbacks?.onInit?.({
               code: COMMON_CODE.SUCCESS,
@@ -180,6 +192,7 @@ class ArmcloudEngine {
   }
 
   /** 静态方法 浏览器是否支持webrTC */
+
   public static isSupported() {
     // 检查是否支持 WebRTC
     if (!window.RTCPeerConnection) {
@@ -341,17 +354,8 @@ class ArmcloudEngine {
   }
 
   /** 生成uuid */
-  // eslint-disable-next-line class-methods-use-this
   generateUUID() {
-    // 生成UUID v4
-    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-      // eslint-disable-next-line no-bitwise
-      const r = (Math.random() * 16) | 0;
-      // eslint-disable-next-line no-bitwise
-      const v = c === "x" ? r : (r & 0x3) | 0x8;
-      const uuid = v.toString(16);
-      return uuid;
-    });
+    return generateUUID();
   }
 
   getRequestId() {

@@ -117,7 +117,8 @@ export interface ArmcloudEngineParams {
 }
 
 // ========== 基础枚举 / 联合类型 ==========
-export type NetworkQualityLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6; // UNKNOWN..DOWN
+export type NetworkQualityLevel = number;
+
 export type ConnectionStateCode = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 export type AutoplayKind = "video" | "audio" | undefined;
 export type StreamIndex = 0 | 1; // 0: 主流, 1: 屏幕流
@@ -174,28 +175,36 @@ export interface ChangeResolutionPayload {
 
 export interface AutoplayFailedEvent {
   userId?: string; // 不带该参数表示本地流播放失败
-  kind: AutoplayKind; // "video" | "audio"
+  kind?: AutoplayKind; // "video" | "audio"
+  [key: string]: any;
 }
 
-export type RotateTypeNum = 0 | 1;
+
+export type RotateTypeNum = number;
+
 export interface RotateInfo {
   width: number;
   height: number;
 }
 
 export interface AudioErrorEvent {
-  code: number;
+  code?: number | string;
   msg?: string;
+  [key: string]: any;
 }
 export interface VideoErrorEvent {
-  code: number;
+  code?: number | string;
   msg?: string;
+  [key: string]: any;
 }
 
+
 export interface ErrorMessagePayload {
-  code: 0 | 1;
+  code?: number | string;
   msg?: string;
-} // 0: RTC通道中断, 1: 获取统计信息时出错
+  [key: string]: any;
+}
+
 
 export interface RunInformationStats {
   userId: string;
@@ -235,9 +244,11 @@ export interface UserLeaveOrJoinPayload {
 }
 
 export interface UserLeaveEvent {
-  userId: string;
-  reason: UserLeaveReason;
+  userId?: string;
+  reason?: UserLeaveReason;
+  [key: string]: any;
 }
+
 
 export interface UserJoinedPayload {
   userInfo: { userId: string; extraInfo?: string };
@@ -312,10 +323,11 @@ export interface ArmcloudCallbacks {
   onChangeRotate?: (type: RotateTypeNum, info: RotateInfo) => void;
 
   // 采集
-  onAudioInit?: () => void;
+  onAudioInit?: (res?: any) => void;
   onAudioError?: (event: AudioErrorEvent) => void;
-  onVideoInit?: () => void;
+  onVideoInit?: (res?: any) => void;
   onVideoError?: (event: VideoErrorEvent) => void;
+
 
   // 状态 / 诊断
   onErrorMessage?: (payload: ErrorMessagePayload) => void;
@@ -433,7 +445,11 @@ export interface ArmcloudRtcOptions {
 
   /** 连接信息 */
   accessInfo?: string;
+  /** 请求 ID */
+  requestId?: string;
 }
+
+
 
 // 获取应用和属性信息
 export const enum EquipmentInfoType {

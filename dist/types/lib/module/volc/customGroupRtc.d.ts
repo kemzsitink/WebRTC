@@ -1,4 +1,5 @@
-declare class CustomGroupRtc {
+import { IGroupControl } from "../../types/groupControlInterface";
+declare class CustomGroupRtc implements IGroupControl {
     private engine;
     private params;
     private pads;

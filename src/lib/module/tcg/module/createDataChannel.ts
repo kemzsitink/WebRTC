@@ -28,7 +28,7 @@ export default class CreateDataChannel {
       await this.TCGSDK.createCustomDataChannel({
         destPort: this.destPort || 10005,
         type: type,
-        onMessage: (res) => {
+        onMessage: (res: any) => {
           try {
             const message = JSON.parse(res);
             const { key, data } = message;

@@ -1,6 +1,9 @@
 import axios from "axios";
 import VERTC from "@volcengine/rtc";
-class CustomGroupRtc {
+import { IGroupControl } from "../../types/groupControlInterface";
+
+class CustomGroupRtc implements IGroupControl {
+
   private engine: any = null;
   private params: any = null;
   private pads: Array<string> = [];
@@ -120,7 +123,7 @@ class CustomGroupRtc {
   /** 远端可见用户加入房间 */
   onUserJoined() {
     this?.engine?.on(VERTC.events.onUserJoined, (user: any) => {
-      this.callbacks.onUserLeaveOrJoin({
+      this.callbacks.onUserLeaveOrJoin?.({
         type: "join",
         userInfo: user?.userInfo,
       });
@@ -151,7 +154,7 @@ class CustomGroupRtc {
   /** 远端可见用户加离开房间 */
   onUserLeave() {
     this?.engine?.on(VERTC.events.onUserLeave, (user: any) => {
-      this.callbacks.onUserLeaveOrJoin({
+      this.callbacks.onUserLeaveOrJoin?.({
         type: "leave",
         userInfo: user?.userInfo,
       });

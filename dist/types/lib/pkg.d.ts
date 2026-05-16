@@ -1,18 +1,17 @@
 import "webrtc-adapter";
-import customRtc from "./module/volc/customRtc";
-import armcloudRtc from "./module/p2p/webRtc";
-import tcgRtc from "./module/tcg/tcgRtc";
+import type { IRtcInstance } from "./types/rtcInterface";
 import { RotateDirection, InjectStreamStatusType, KeyboardMode } from "./types/index";
 import type { CustomDefinition, ArmcloudEngineParams, ArmcloudRtcOptions, ArmcloudCallbacks, EquipmentInfoType } from "./types/index";
 import { MessageKey, MediaType } from "./types/webrtcType";
 declare class ArmcloudEngine {
     version: string;
-    rtcInstance: customRtc | armcloudRtc | tcgRtc | null;
+    rtcInstance: IRtcInstance | null;
     rtcOptions: ArmcloudRtcOptions | null;
     callbacks: ArmcloudCallbacks | null;
     streamType: number | null;
     private axiosSource;
     constructor(params: ArmcloudEngineParams);
+    private applyToken;
     /** 静态方法 浏览器是否支持webrTC */
     static isSupported(): boolean;
     reshapeWindow(): void;
@@ -25,10 +24,10 @@ declare class ArmcloudEngine {
     /** 打开或关闭监控操作 */
     setMonitorOperation(isMonitor: boolean, forwardOff?: boolean): void;
     /** 获取注入推流状态 */
-    getInjectStreamStatus(type: InjectStreamStatusType, timeout?: number): Promise<unknown> | undefined;
+    getInjectStreamStatus(type: InjectStreamStatusType, timeout?: number): any;
     /** 生成uuid */
     generateUUID(): string;
-    getRequestId(): any;
+    getRequestId(): string | undefined;
     triggerClickEvent(options: {
         x: number;
         y: number;
@@ -100,22 +99,22 @@ declare class ArmcloudEngine {
      * 该方法仅暂停远端流的接收，并不影响远端流的采集和发送。
      * @param mediaType 1 只控制音频; 2 只控制视频; 3 同时控制音频和视频
      */
-    pauseAllSubscribedStream(mediaType?: number): Promise<void> | undefined;
+    pauseAllSubscribedStream(mediaType?: number): void | Promise<void>;
     /**
      * 恢复接收来自远端的媒体流
      * 该方法仅恢复远端流的接收，并不影响远端流的采集和发送。
      * @param mediaType 1 只控制音频; 2 只控制视频; 3 同时控制音频和视频
      */
-    resumeAllSubscribedStream(mediaType?: number): Promise<void> | undefined;
+    resumeAllSubscribedStream(mediaType?: number): void | Promise<void>;
     /**
      * 订阅房间内指定的通过摄像头/麦克风采集的媒体流。
      */
-    subscribeStream(mediaType?: number): Promise<void>;
+    subscribeStream(mediaType?: number): void | Promise<void>;
     /**
      * 取消订阅房间内指定的通过摄像头/麦克风采集的媒体流。
      * 该方法对自动订阅和手动订阅模式均适用。
      */
-    unsubscribeStream(mediaType?: number): Promise<void> | undefined;
+    unsubscribeStream(mediaType?: number): void | Promise<void>;
     /** 截图-保存到本地 */
     saveScreenShotToLocal(): Promise<unknown>;
     /** 修改屏幕分辨率和dpi */
@@ -156,7 +155,7 @@ declare class ArmcloudEngine {
      */
     setAutoRecycleTime(second: number): void;
     /** 获取无操作回收时间 */
-    getAutoRecycleTime(): any;
+    getAutoRecycleTime(): number | undefined;
     /** 底部栏操作按键 */
     sendCommand(command: string, forwardOff?: boolean): void;
     /** 音量增加按键事件 */
@@ -169,14 +168,11 @@ declare class ArmcloudEngine {
      */
     saveCloudClipboard(flag: boolean): void;
     /** 开启摄像头 或 麦克风注入 返回一个promise */
-    startMediaStream(mediaType: MediaType): Promise<void> | Promise<{
-        audio: any;
-        video: any;
-    }> | undefined;
+    startMediaStream(mediaType: MediaType): void | Promise<any>;
     /** 关闭摄像头 或 麦克风注入 返回一个promise */
-    stopMediaStream(mediaType: MediaType): Promise<void> | undefined;
+    stopMediaStream(mediaType: MediaType): void | Promise<any>;
     /**  注入视频到相机 */
-    injectVideoStream(type: MessageKey.START_INJECTION_VIDEO | MessageKey.STOP_INJECTION_VIDEO, options?: any, timeout?: number, forwardOff?: boolean): Promise<unknown> | undefined;
+    injectVideoStream(type: MessageKey.START_INJECTION_VIDEO | MessageKey.STOP_INJECTION_VIDEO, options?: any, timeout?: number, forwardOff?: boolean): any;
     /**
      * 摇一摇
      * @param time

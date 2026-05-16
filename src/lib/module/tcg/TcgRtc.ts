@@ -2,26 +2,31 @@ import type {
     CustomDefinition,
     ArmcloudRtcOptions,
     ArmcloudCallbacks,
+    ConnectionStateCode,
     EquipmentInfoEvent,
     AdbOutputEvent,
-    ConnectionStateCode,
 } from "../../types/index";
-import { KeyboardMode } from "../../types/index";
+
 import {
     EquipmentInfoType,
     InjectStreamStatusType,
+    RotateDirection,
+    KeyboardMode,
     MediaDeviceType,
     AndroidKeyCode,
-    RotateDirection,
 } from "../../types/index";
+
 import { CloudGamingWebSDK, type AndroidInstance } from "./core/index";
-import { addInputElement } from "../../common/textInput";
+import { isMobile, isTouchDevice, waitStyleApplied } from "../../utils/index";
+
+
 import CreateDataChannel, { EventType } from "./module/createDataChannel";
+
 import {
     MetricsReporter,
     ReportEventType,
 } from "../../common/metrics-reporter";
-import { isMobile, isTouchDevice, waitStyleApplied } from "../../utils/index";
+
 import axios from "axios";
 import {
     TouchType,
@@ -34,22 +39,21 @@ import {
     getFps,
     getKbps,
     type ResolutionId,
-    type BitrateId,
     type FramerateId,
+    type BitrateId,
 } from "./config/streamProfiles";
 
-class tcgRtc {
+import { BaseRtc } from "../common/BaseRtc";
+import { IRtcInstance } from "../../types/rtcInterface";
+
+export default class TcgRtc extends BaseRtc implements IRtcInstance {
     // 引擎实例
     private TCGSDK: CloudGamingWebSDK;
 
     // 云机实例
     private androidInstance: AndroidInstance;
 
-    // 视频dom id
-    private videoDomId: string = "";
 
-    // 远程用户 ID
-    private remoteUserId: string = "";
 
     private metricsReporter: MetricsReporter | null = null;
 
@@ -63,7 +67,7 @@ class tcgRtc {
     private groupDataChannel: CreateDataChannel | null = null;
 
     // 注入推流状态
-    private isGroupControl: boolean = false;
+
     private groupPads: Array<string> = [];
 
     private promiseMap: any = {
@@ -71,26 +75,14 @@ class tcgRtc {
         injectStatus: {},
     };
 
-    // 是否注入摄像头
-    private isCameraInject: boolean = false;
-    // 是否注入麦克风
-    private isMicrophoneInject: boolean = false;
 
-    // 是否注入摄像头
-    private enableCamera: boolean = false;
-    // 是否注入麦克风
-    private enableMicrophone: boolean = false;
 
-    // 摄像头设备 ID
-    private videoDeviceId: string = "";
-    // 麦克风设备 ID
-    private audioDeviceId: string = "";
+
 
     // 埋点定时器
     private metricsTimer: any = null;
 
-    // 输入框元素
-    private inputElement: HTMLInputElement | null = null;
+
 
     // 旋转方向
     private rotateType: RotateDirection | undefined = undefined;
@@ -142,10 +134,11 @@ class tcgRtc {
     };
 
     constructor(
-        private initDomId: string,
-        private options: ArmcloudRtcOptions,
-        private callbacks: ArmcloudCallbacks
+        initDomId: string,
+        options: ArmcloudRtcOptions,
+        callbacks: ArmcloudCallbacks
     ) {
+        super(initDomId, options, callbacks);
         this.TCGSDK = new CloudGamingWebSDK();
         this.androidInstance = this.TCGSDK.getAndroidInstance();
         this.enableMicrophone = this.options.enableMicrophone;
@@ -158,35 +151,10 @@ class tcgRtc {
         // 禁用粘贴
         this.TCGSDK.setPaste(false);
         // 设置视频dom
-        this.setupVideoDom();
+        this.createVideoContainer(this.options.padCode, this.options.masterIdPrefix);
     }
-    private setupVideoDom() {
-        const { masterIdPrefix, padCode } = this.options;
 
-        // 生成视频容器ID
-        const videoDomId = `${masterIdPrefix}_${padCode}_armcloudVideo`;
-        this.videoDomId = videoDomId;
 
-        // 创建视频容器元素
-        const videoContainer = document.createElement("div");
-        videoContainer.id = videoDomId;
-        videoContainer.style.position = "relative";
-
-        // 获取父容器并添加视频容器
-        const parentContainer = document.getElementById(this.initDomId);
-        if (parentContainer) {
-            parentContainer.appendChild(videoContainer);
-        } else {
-            console.warn(`Parent container with id "${this.initDomId}" not found`);
-        }
-    }
-    /** 获取消息模板 */
-    private getMsgTemplate(touchType: TouchType, content: Object) {
-        return JSON.stringify({
-            touchType,
-            content: JSON.stringify(content),
-        });
-    }
     setMicrophone(val: boolean) {
         this.enableMicrophone = val;
     }
@@ -235,9 +203,10 @@ class tcgRtc {
         this.unsubscribeStream(MediaType.AUDIO);
     }
 
-    getRequestId() {
+    public getRequestId() {
         return this.TCGSDK.getRequestId();
     }
+
     /**
      * 取消静音
      */
@@ -585,9 +554,8 @@ class tcgRtc {
     private setupInputElement() {
         const { disable, disableLocalIME } = this.options;
 
-        if (!this.inputElement && !disable && !disableLocalIME) {
-            addInputElement(this, true);
-        }
+        this.inputService.initIme(this.initDomId, { disableLocalIME });
+
     }
 
     /** 获取远端输入框状态 */
@@ -601,14 +569,14 @@ class tcgRtc {
 
     /** 同步远端输入状态到本地输入框 */
     private syncInputFocusState(data: { isOpen?: boolean; imeOptions?: string }) {
-        if (!this.inputElement) return;
+        if (!this.inputService.getInputElement()) return;
         const { allowLocalIMEInCloud, keyboard } = this.options;
         const { isOpen, imeOptions } = data;
 
         // 更新 enterkeyhint
         const hint = this.enterkeyhintObj[imeOptions as any];
         if (hint) {
-            this.inputElement.enterKeyHint = hint;
+            this.inputService.getInputElement()!.enterKeyHint = hint;
         }
 
         // 是否需要本地焦点控制
@@ -617,9 +585,10 @@ class tcgRtc {
 
         if (allowLocalFocus && typeof isOpen === "boolean") {
             setTimeout(() => {
-                isOpen ? this.inputElement?.focus() : this.inputElement?.blur();
+                isOpen ? this.inputService.focus() : this.inputService.blur();
             }, 150);
         }
+
 
         // 记录输入框状态
         this.remoteInputState = {
@@ -797,7 +766,7 @@ class tcgRtc {
                 min_bitrate: kbps,
                 unit: "Kbps",
             },
-            onConnectFail: (response) => {
+            onConnectFail: (response: any) => {
                 this.metricsReporter?.addParam(ReportEventType.FIRST_FRAME, {
                     judgeTime: Date.now(),
                     result: 0,
@@ -851,7 +820,7 @@ class tcgRtc {
                 this.joinGroupRoom(pads);
             },
 
-            onConfigurationChange: (response) => {
+            onConfigurationChange: (response: any) => {
                 let {
                     orientation,
                     deg,
@@ -922,7 +891,7 @@ class tcgRtc {
             },
 
             // 推流分辨率发生变化
-            onVideoStreamConfigChange: (response) => {
+            onVideoStreamConfigChange: (response: any) => {
                 let { width, height } = this.lastStreamResolution;
 
                 this.callbacks?.onChangeResolution?.({
@@ -936,13 +905,13 @@ class tcgRtc {
                 // 记录上一次推流分辨率大小
                 Object.assign(this.lastStreamResolution, response);
             },
-            onAndroidInstanceEvent(response) {
+            onAndroidInstanceEvent(response: any) {
                 const { type, data }: any = response;
                 if (!data?.event_type) {
                     that.syncInputFocusState(that.remoteInputState);
                 }
             },
-            onEvent: (response) => {
+            onEvent: (response: any) => {
                 const { type, data } = response;
                 switch (type) {
                     case "video_state":
@@ -1560,7 +1529,8 @@ class tcgRtc {
             videoDomElement.innerHTML = "";
         }
 
-        this.inputElement = null;
+        // inputService handled in BaseRtc/destroy
+
     }
 
     /**
@@ -1887,4 +1857,4 @@ class tcgRtc {
     }
 }
 
-export default tcgRtc;
+

@@ -26,6 +26,7 @@
     "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^15.2.0",
     "@rollup/plugin-typescript": "^11.1.0",
+    "@types/crypto-js": "^4.2.2",
     "rollup": "^4.20.0",
     "tslib": "^2.6.0",
     "typescript": "^5.5.0"

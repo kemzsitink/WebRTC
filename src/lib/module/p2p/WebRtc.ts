@@ -1,4 +1,3 @@
-import CryptoJS from "crypto-js";
 import Shake from "../../common/shake";
 import type { CustomDefinition } from "../../types/index";
 
@@ -29,34 +28,31 @@ import {
   MediaStreamType,
 } from "../../types/webrtcType";
 import { generateTouchCoord } from "../../common/mixins";
-import { addInputElement } from "../../common/textInput";
+
 import ScreenshotOverlay from "../../common/screenshotOverlay";
 import type {
   TouchInfo,
   ArmcloudRtcOptions,
   ArmcloudCallbacks,
 } from "../../types/index";
+import { decryptAES } from "../../utils/crypto";
+import { BaseRtc } from "../common/BaseRtc";
+import { IRtcInstance } from "../../types/rtcInterface";
+import { IGroupControl } from "../../types/groupControlInterface";
 
-class WebRTC {
-  // 初始外部H5传入DomId
-  private initDomId: string = "";
-  // video容器id
-  private videoDomId: string = "";
+
+export default class WebRtc extends BaseRtc implements IRtcInstance {
+
   private remoteVideoContainerId: string = "";
   private remoteVideoId: string = "";
   private screenShotInstance: ScreenshotOverlay | null = null;
   private pingTimer: any = null;
-  // 鼠标、触摸事件时是否按下
-  private hasPushDown: boolean = false;
+
   // 刷新ui消息次数
   private refreshUiMsgNumber: number = 0;
   private isVideoFirstFrame: boolean = false;
-  private enableMicrophone: boolean = true;
-  private enableCamera: boolean = true;
-  private videoDeviceId: string = "";
-  private audioDeviceId: string = "";
-  private isCameraInject: boolean = false;
-  private isMicrophoneInject: boolean = false;
+
+
   // 群控同步
   private groupControlSync: boolean = true;
   // 当前推流状态promise 缓存
@@ -80,7 +76,7 @@ class WebRTC {
     isVertical: true,
   };
 
-  private options: ArmcloudRtcOptions;
+
 
   // websocket
   private socket: any;
@@ -89,8 +85,8 @@ class WebRTC {
   private retryTime: number;
   private remotePc: any = null;
   private dataChannel: any;
-  private remoteUserId: string;
-  private inputElement: HTMLInputElement | undefined;
+
+
   // 回收时间定时器
   private autoRecoveryTimer: any = null;
   // 运行信息定时器
@@ -130,7 +126,7 @@ class WebRTC {
   private socketParams: any;
 
   // 回调函数集合
-  private callbacks: ArmcloudCallbacks = {};
+
 
   private videoStreams: Array<MediaStream> = [];
   private audioStreams: Array<MediaStream> = [];
@@ -141,9 +137,9 @@ class WebRTC {
   private senderAudioTracks: Array<MediaStreamTrack> = [];
 
   // 是否群控
-  private isGroupControl: boolean = false;
 
-  private groupRtc: any = null;
+
+
   private groupPads: any = [];
   private masterIdPrefix: string = "";
 
@@ -155,10 +151,10 @@ class WebRTC {
     params: ArmcloudRtcOptions,
     callbacks: ArmcloudCallbacks
   ) {
-    this.initDomId = viewId;
-    this.options = params;
+    super(viewId, params, callbacks);
+    
     const whileCallList = ["onAutoRecoveryTime"];
-    callbacks &&
+    if (callbacks) {
       Object.keys(callbacks).forEach((key) => {
         const originalCallback = callbacks[key as keyof ArmcloudCallbacks];
         this.callbacks[key as keyof ArmcloudCallbacks] = (...args: any[]) => {
@@ -168,6 +164,8 @@ class WebRTC {
           }
         };
       });
+    }
+
     this.enableMicrophone = params.enableMicrophone;
     this.enableCamera = params.enableCamera;
     this.remoteUserId = params.padCode;
@@ -178,43 +176,45 @@ class WebRTC {
     this.videoDeviceId = params.videoDeviceId || "";
     this.audioDeviceId = params.audioDeviceId || "";
 
-    // 获取外部容器div元素
+    // 获取外部容器 div 元素
     const h5Dom = document.getElementById(this.initDomId);
     this.videoElement = new VideoElement(
       this.masterIdPrefix,
       this.remoteUserId
     );
 
-    // 获取video元素
+    // 获取 video 元素
     this.videoDomId = this.videoElement?.getVideoDomId();
     this.remoteVideoContainerId = this.videoElement?.getContainerId();
     this.remoteVideoId = this.videoElement?.getRemoteVideoId();
     const videoContainer = this.videoElement?.createElements();
-    // 将div元素添加到外部容器中
+    
+    // 将 div 元素添加到外部容器中
     h5Dom?.appendChild(videoContainer);
 
     if (!this.options.disable) {
-      addInputElement(this, true);
+      this.inputService.initIme(this.initDomId, { disableLocalIME: this.options.disableLocalIME });
     }
-    // 解密-ws地址
-    const signalServer = this.decryptAES(
+
+    
+    // 解密 - ws 地址
+    const signalServer = decryptAES(
       this.options.signalServer,
       this.options.padCode
     );
 
     const { isWsProxy } = this.options;
 
-    let wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host
-      }/sdk-ws/${this.options.roomToken}`;
+    let wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/sdk-ws/${this.options.roomToken}`;
     if (!isWsProxy) {
       wsUrl = `${signalServer}/${this.options.roomToken}`;
     }
 
-    // stuns地址
-    const stuns = this.decryptAES(this.options.stuns, this.options.padCode);
+    // stuns 地址
+    const stuns = decryptAES(this.options.stuns, this.options.padCode);
     const stunsArr = JSON.parse(stuns as string);
-    // turns地址
-    const turns = this.decryptAES(this.options.turns, this.options.padCode);
+    // turns 地址
+    const turns = decryptAES(this.options.turns, this.options.padCode);
     const turnsArr = JSON.parse(turns as string);
 
     // 信令服务器
@@ -251,43 +251,16 @@ class WebRTC {
     this.remotePc = new RTCPeerConnection(this.socketParams.rtcConfig);
   }
 
+
   /**
    * AES 解密方法
    * @param {*} encryptData 加密数据
    * @param {*} key 秘钥
    * @returns 解密后数据
    */
-  private decryptAES(encryptData: string, key: string) {
-    try {
-      const ciphertext = CryptoJS.enc.Base64.parse(encryptData); // Base64解密
-      const stringEncryptData = CryptoJS.format.Hex.parse(
-        ciphertext.toString()
-      );
-      let keyFormat = key.padEnd(16, "0");
 
-      // 超过16就截取
-      if (keyFormat.length > 16) {
-        keyFormat = keyFormat.slice(0, 16);
-      }
-      const keyValue = CryptoJS.enc.Utf8.parse(keyFormat); // 密钥
-      const decrypt = CryptoJS.AES.decrypt(stringEncryptData, keyValue, {
-        mode: CryptoJS.mode.ECB,
-        padding: CryptoJS.pad.Pkcs7,
-      });
-      // 将解密后的结果转换为字符串，并解析为JSON对象
-      const source = CryptoJS.enc.Utf8.stringify(decrypt);
-      return source;
-    } catch (error) {
-      return null; // 返回 null 或其他自定义的错误标识
-    }
-  }
 
-  private getMsgTemplate(touchType: TouchType, content: object) {
-    return JSON.stringify({
-      touchType,
-      content: JSON.stringify(content),
-    });
-  }
+
   /** 获取应用信息 */
   public getEquipmentInfo(type: "app" | "attr") {
     if (this.stopOperation) return;
@@ -914,7 +887,8 @@ class WebRTC {
     }
   }
   private sendGroupMag(msg: string) {
-    this.groupRtc?.sendMessage(
+    this.groupRtc?.sendMessage?.(
+
       JSON.stringify({
         event: WebSocketEventType.BROADCAST_MSG,
         data: msg,
@@ -924,7 +898,8 @@ class WebRTC {
   /** 群控退出房间 */
   public kickItOutRoom(pads: any) {
     if (this.stopOperation) return;
-    this.groupRtc?.sendMessage(
+    this.groupRtc?.sendMessage?.(
+
       JSON.stringify({
         event: WebSocketEventType.BROADCAST_MSG,
         data: JSON.stringify({
@@ -942,7 +917,7 @@ class WebRTC {
   }
   private createWebGroupRtc(pads: any) {
     const arr = pads?.filter((v: any) => v !== this.remoteUserId);
-    this.groupRtc = new webGroupRtc(this.options, arr, this.callbacks);
+    this.groupRtc = new webGroupRtc(this.options, arr, this.callbacks) as IGroupControl;
   }
   /** 滚轮事件 */
   private handleVideoWheel(videoDom: HTMLVideoElement) {
@@ -992,12 +967,13 @@ class WebRTC {
         (allowLocalIMEInCloud && keyboard === "pad") || keyboard === "local";
       // 处理IOS本机键盘
       if (
-        this.inputElement &&
+        this.inputService.getInputElement() &&
         shouldHandleFocus &&
         typeof inputStateIsOpen === "boolean"
       ) {
-        inputStateIsOpen ? this.inputElement.focus() : this.inputElement.blur();
+        inputStateIsOpen ? this.inputService.focus() : this.inputService.blur();
       }
+
       this.touchInfo = generateTouchCoord();
       const videoDomIdRect = videoDom.getBoundingClientRect();
       const distanceToTop = videoDomIdRect.top;
@@ -1785,7 +1761,8 @@ class WebRTC {
   /** 销毁 */
   private destroy() {
     this.close();
-    this.inputElement?.remove();
+    // inputService handled in BaseRtc/destroy
+
     this.videoElement?.destroy();
     this.socketParams?.remoteVideo?.remove();
     this.socketParams?.remoteAudio?.remove();
@@ -2041,7 +2018,7 @@ class WebRTC {
           }
         }
         // 云机、本机键盘使用消息
-        if (msg.key === MessageKey.INPUT_STATE && this.inputElement) {
+        if (msg.key === MessageKey.INPUT_STATE && this.inputService.getInputElement()) {
           const msgData = JSON.parse(msg.data);
           this.roomMessage.inputStateIsOpen = msgData.isOpen;
 
@@ -2054,18 +2031,19 @@ class WebRTC {
 
           // 设置回车按钮文案
           const enterkeyhintText = this.enterkeyhintObj[msgData.imeOptions];
-          this.inputElement?.setAttribute("enterkeyhint", enterkeyhintText);
+          this.inputService.getInputElement()?.setAttribute("enterkeyhint", enterkeyhintText);
           console.log("inputStateIsOpen", inputStateIsOpen);
           // 若存在inputElement，则判断当前本机键盘是否打开
           if (
-            this.inputElement &&
+            this.inputService.getInputElement() &&
             shouldHandleFocus &&
             typeof inputStateIsOpen === "boolean"
           ) {
             inputStateIsOpen
-              ? this.inputElement.focus()
-              : this.inputElement.blur();
+              ? this.inputService.focus()
+              : this.inputService.blur();
           }
+
         }
         // 将云机内容复制到本机剪切板
         if (msg.key === MessageKey.CLIPBOARD) {
@@ -2132,7 +2110,8 @@ class WebRTC {
         pads: [pads[index]],
         touchType: TouchType.CLIPBOARD,
       });
-      this.groupRtc?.sendMessage(
+      this.groupRtc?.sendMessage?.(
+
         JSON.stringify({
           event: WebSocketEventType.BROADCAST_MSG,
           data: message,
@@ -2148,7 +2127,8 @@ class WebRTC {
         pads: [pads[index]],
         touchType: TouchType.INPUT_BOX,
       });
-      this.groupRtc?.sendMessage(
+      this.groupRtc?.sendMessage?.(
+
         JSON.stringify({
           event: WebSocketEventType.BROADCAST_MSG,
           data: message,
@@ -2264,8 +2244,9 @@ class WebRTC {
   }
 
   /** 截图-保存到本地 */
-  public saveScreenShotToLocal() {
-    if (this.stopOperation) return;
+  public saveScreenShotToLocal(): Promise<any> {
+    if (this.stopOperation) return Promise.reject("Operation stopped");
+
     return new Promise((resolve, reject) => {
       try {
         const video = document.getElementById(
@@ -2624,4 +2605,4 @@ class WebRTC {
   }
 }
 
-export default WebRTC;
+

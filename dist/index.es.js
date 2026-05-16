@@ -1,171 +1,45 @@
 import 'webrtc-adapter';
 import axios from 'axios';
-import VERTC, { StreamIndex } from '@volcengine/rtc';
-import copy from 'clipboard-copy';
 import CryptoJS from 'crypto-js';
+import copy from 'clipboard-copy';
+import VERTC, { StreamIndex } from '@volcengine/rtc';
 
-class CustomGroupRtc {
-    engine = null;
-    params = null;
-    pads = [];
-    callbacks = null;
-    sourceArr = [];
-    constructor(params, pads, callbacks) {
-        this.params = params;
-        this.pads = pads;
-        this.callbacks = callbacks;
-    }
-    // 关闭 WebSocket 连接
-    close() {
-        this.sourceArr?.forEach((v) => {
-            v.cancel();
-        });
-        this.sourceArr = [];
-    }
-    kickItOutRoom(pads) {
-        this.pads = this.pads?.filter((v) => !pads?.includes(v)) || [];
-        this.sendRoomMessage(JSON.stringify({
-            touchType: "kickOutUser",
-            content: JSON.stringify(pads),
-        }));
-    }
-    joinRoom(pads) {
-        this.pads = [...new Set([...(this.pads || []), ...(pads || [])])];
-        const source = axios.CancelToken.source(); // 创建一个取消令牌
-        this.sourceArr.push(source);
-        return new Promise((resolve, reject) => {
-            const { baseUrl } = this.params;
-            const base = baseUrl
-                ? `${baseUrl}/rtc/open/room/sdk/share/applyToken`
-                : `https://openapi.armcloud.net/rtc/open/room/sdk/share/applyToken`;
-            const { userId, uuid, token, manageToken } = this.params;
-            const url = manageToken ? "/manage/rtc/room/share/applyToken" : base;
-            const tok = manageToken || token;
-            axios
-                .post(url, {
-                userId,
-                uuid,
-                terminal: "h5",
-                expire: 360000,
-                pushPublicStream: false,
-                pads: pads?.map((v) => {
-                    return {
-                        padCode: v,
-                        // videoStream: {
-                        //   resolution: 7, // 分辨率
-                        //   frameRate: 5, // 帧率
-                        //   bitrate: 13, // 码率
-                        // },
-                        userId,
-                    };
-                }),
-            }, {
-                headers: manageToken ? { Authorization: tok } : { token: tok },
-                cancelToken: source.token,
-            })
-                .then((res) => {
-                resolve(res);
-            })
-                .catch((error) => {
-                if (axios.isCancel(error)) {
-                    return;
-                }
-                reject(error);
-            });
-        });
-    }
-    async getEngine() {
-        return new Promise((resolve, reject) => {
-            this.joinRoom(this.pads)
-                .then((res) => {
-                const { userId } = this.params;
-                const { appId, roomCode, roomToken } = res?.data?.data || {};
-                this.engine = VERTC.createEngine(appId);
-                this.createEngine({
-                    roomCode,
-                    roomToken,
-                    userId,
-                    resolve,
-                    reject,
-                });
-            })
-                .catch((err) => {
-                const error = new Error("Get Token Error");
-                error.code = "TOKEN_ERR";
-                reject(error);
-            });
-        });
-    }
-    async sendUserMessage(userId, message) {
-        return await this?.engine?.sendUserMessage(userId, message);
-    }
-    async sendRoomMessage(message) {
-        return await this?.engine?.sendRoomMessage(message);
-    }
-    getMsgTemplate(touchType, content) {
-        return JSON.stringify({
-            touchType,
-            content: JSON.stringify(content),
-        });
-    }
-    /** 远端可见用户加入房间 */
-    onUserJoined() {
-        this?.engine?.on(VERTC.events.onUserJoined, (user) => {
-            this.callbacks.onUserLeaveOrJoin({
-                type: "join",
-                userInfo: user?.userInfo,
-            });
-        });
-    }
-    /** 监听 onUserMessageReceived 事件 */
-    onUserMessageReceived() {
-        const onUserMessageReceived = (e) => {
-            if (e.message) {
-                const msg = JSON.parse(e.message);
-                if (msg.key === "userjoin") {
-                    this.sendRoomMessage(this.getMsgTemplate("openGroupControl", {
-                        pads: this.pads,
-                    }));
-                    this.sendUserMessage(e.userId, this.getMsgTemplate("openGroupControl", { isOpen: true }));
-                }
-            }
-        };
-        this.engine.on(VERTC.events.onUserMessageReceived, onUserMessageReceived);
-    }
-    /** 远端可见用户加离开房间 */
-    onUserLeave() {
-        this?.engine?.on(VERTC.events.onUserLeave, (user) => {
-            this.callbacks.onUserLeaveOrJoin({
-                type: "leave",
-                userInfo: user?.userInfo,
-            });
-        });
-    }
-    async createEngine(options) {
-        const { roomToken, roomCode, userId, resolve, reject } = options;
-        try {
-            const res = await this.engine.joinRoom(roomToken, roomCode, {
-                userId,
-            }, {
-                isAutoPublish: false,
-                isAutoSubscribeAudio: false,
-                isAutoSubscribeVideo: false,
-            });
-            this.onUserJoined();
-            this.onUserLeave();
-            this.onUserMessageReceived();
-            this.sendRoomMessage(this.getMsgTemplate("openGroupControl", {
-                pads: this.pads,
-            }));
-            resolve({
-                engine: this.engine,
-                result: res,
-            });
+/**
+ * AES Decryption Utility
+ * @param encryptData Data to decrypt
+ * @param key Secret key (usually padCode)
+ * @returns Decrypted string or null
+ */
+function decryptAES(encryptData, key) {
+    try {
+        const ciphertext = CryptoJS.enc.Base64.parse(encryptData);
+        const stringEncryptData = CryptoJS.format.Hex.parse(ciphertext.toString());
+        let keyFormat = key.padEnd(16, "0");
+        if (keyFormat.length > 16) {
+            keyFormat = keyFormat.slice(0, 16);
         }
-        catch (error) {
-            reject(error);
-        }
+        const keyValue = CryptoJS.enc.Utf8.parse(keyFormat);
+        const decrypt = CryptoJS.AES.decrypt(stringEncryptData, keyValue, {
+            mode: CryptoJS.mode.ECB,
+            padding: CryptoJS.pad.Pkcs7,
+        });
+        const source = CryptoJS.enc.Utf8.stringify(decrypt);
+        return source;
     }
+    catch (error) {
+        console.error("AES Decryption error:", error);
+        return null;
+    }
+}
+/**
+ * Generate UUID v4
+ */
+function generateUUID() {
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
 }
 
 class ShakeSimulator {
@@ -208,416 +82,6 @@ class ShakeSimulator {
     }
 }
 
-const generateTouchCoord = () => {
-    const params = {
-        pressure: 0.5 + 0.3 * Math.random(),
-        size: 0.05 + 0.03 * Math.random(),
-        touchMajor: 80 + Math.floor(130 * Math.random()),
-        touchMinor: 0,
-        toolMajor: 0,
-        toolMinor: 0,
-    };
-    params.touchMinor = params.touchMajor - (15 + Math.floor(30 * Math.random()));
-    params.toolMajor = params.touchMajor;
-    params.toolMinor = params.touchMinor;
-    return params;
-};
-
-const blobToText = (blob) => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-            resolve(reader.result); // 读取结果为文本
-        };
-        reader.onerror = () => {
-            reject(new Error("Failed to read blob as text"));
-        };
-        reader.readAsText(blob); // 读取 Blob 为文本
-    });
-};
-const arrayBufferToText = (buffer) => {
-    if (typeof TextDecoder !== "undefined") {
-        const decoder = new TextDecoder("utf-8");
-        return decoder.decode(buffer);
-    }
-    else {
-        return String.fromCharCode.apply(null, new Uint8Array(buffer));
-    }
-};
-const checkType = (input) => {
-    if (input instanceof ArrayBuffer) {
-        return "ArrayBuffer";
-    }
-    else if (input instanceof Blob) {
-        return "Blob";
-    }
-    else {
-        return "String";
-    }
-};
-/** 判断是否是手机 */
-const isMobile = () => {
-    const flag = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile\//i.test(
-    // eslint-disable-next-line comma-dangle
-    navigator.userAgent);
-    return flag;
-};
-const isTouchDevice = () => !!("ontouchstart" in document.documentElement);
-const waitStyleApplied = async (el) => {
-    void el.offsetWidth;
-    await nextFrame();
-};
-const nextFrame = () => {
-    return new Promise((resolve) => requestAnimationFrame(() => resolve()));
-};
-const copyText = (text) => {
-    return copy(text);
-};
-
-const keyCodeMap = {
-    ArrowUp: 19,
-    ArrowDown: 20,
-    ArrowLeft: 21,
-    ArrowRight: 22,
-    Enter: 66,
-    Backspace: 67,
-};
-const addInputElement = (rtc, isP2p) => {
-    const container = document.getElementById(rtc.initDomId);
-    if (!container)
-        return; // 容器不存在直接返回（保持最小影响）
-    // 创建并配置 input
-    const el = (rtc.inputElement = document.createElement("textarea"));
-    el.autocomplete = "off";
-    el.id = `${rtc.masterIdPrefix || ""}_${rtc.remoteUserId}_inputEle`;
-    el.className = "play-text-input";
-    el.style.cssText = `
-      position:absolute;
-      top:0;
-      left:0;
-      pointer-events:none;
-      opacity:0.01;
-      width:100%;
-      max-width:95%;
-      height: 40px;
-      resize: none;
-      overflow: hidden;
-  `;
-    const userId = rtc?.options?.clientId;
-    const sendRaw = (json) => isP2p ? rtc.sendUserMessage(json) : rtc.sendUserMessage(userId, json);
-    const send = (payload) => sendRaw(JSON.stringify(payload));
-    // IME 组合输入标记
-    let isComposing = false;
-    // ---- 事件绑定 ----
-    el.addEventListener("compositionstart", () => {
-        isComposing = true;
-    });
-    el.addEventListener("compositionend", (e) => {
-        isComposing = false;
-        const target = e.target;
-        send({
-            action: 1,
-            touchType: "inputBox",
-            keyCode: 1,
-            text: target.value,
-        });
-        el.value = "";
-    });
-    el.addEventListener("input", (e) => {
-        if (isComposing)
-            return;
-        const target = e.target;
-        send({
-            action: 1,
-            touchType: "inputBox",
-            keyCode: 1,
-            text: target.value,
-        });
-        el.value = "";
-    });
-    el.addEventListener("keydown", (e) => {
-        const code = keyCodeMap?.[e.key];
-        if (code === undefined)
-            return;
-        // 与原顺序一致：如果按下 Enter，先失焦
-        if (e.key === "Enter")
-            el.blur();
-        console.log("code", code);
-        // 按下
-        send({
-            action: 1,
-            touchType: "input",
-            keyCode: code,
-            text: "",
-        });
-        // 抬起
-        send({
-            action: 0,
-            touchType: "input",
-            keyCode: code,
-            text: "",
-        });
-    });
-    // 添加到容器
-    container.appendChild(el);
-    container.style.position = "relative";
-};
-
-class ScreenshotOverlay {
-    videoContainer;
-    video;
-    rotateType;
-    canvas;
-    context;
-    constructor(videoContainer, rotateType = 0) {
-        this.videoContainer = videoContainer;
-        this.video = this.videoContainer?.querySelector("video");
-        this.rotateType = rotateType;
-        this.canvas = document.createElement("canvas");
-        this.context = this.canvas.getContext("2d", {
-            willReadFrequently: true,
-        });
-        this.initCanvas();
-    }
-    // 初始化 Canvas 并插入到 video 上
-    initCanvas() {
-        if (this.videoContainer && this.canvas) {
-            // 设置 canvas 尺寸与 video 元素的显示尺寸一致
-            this.videoContainer.style.position = "relative";
-            Object.assign(this.canvas.style, {
-                top: 0,
-                left: 0,
-                position: "absolute",
-                display: "none",
-                pointerEvents: "none",
-                zIndex: "10",
-                // border: '5px solid red'
-            });
-            // 将 canvas 插入到 video 的父元素中，覆盖在 video 上
-            this.videoContainer?.appendChild(this.canvas);
-        }
-    }
-    configureCanvas(rotateType, width, height) {
-        // 交换宽高并清空画布
-        if (rotateType === 1) {
-            this.canvas.width = height;
-            this.canvas.height = width;
-            this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            this.context.translate(0, this.canvas.height);
-            this.context.rotate(-Math.PI / 2); // 270度旋转
-        }
-        else {
-            // 恢复到正常状态
-            this.canvas.width = width;
-            this.canvas.height = height;
-            this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            // 如果旋转类型已设置，交换宽高
-            if (this.rotateType) {
-                [this.canvas.width, this.canvas.height] = [height, width];
-            }
-            this.context.setTransform(1, 0, 0, 1, 0, 0); // 恢复坐标系
-        }
-        this.rotateType = rotateType;
-    }
-    /**
-     * 旋转截图
-     * @param rotateType 0:竖屏 1:横屏
-     */
-    setScreenshotrotateType(rotateType = 0) {
-        // 创建一个临时画布
-        const tempCanvas = document.createElement("canvas");
-        const tempContext = tempCanvas.getContext("2d");
-        // 设置临时画布的尺寸为当前画布尺寸
-        tempCanvas.width = this.canvas.width;
-        tempCanvas.height = this.canvas.height;
-        // 将当前画布内容绘制到临时画布
-        tempContext.drawImage(this.canvas, 0, 0);
-        // 配置画布的旋转和尺寸
-        this.configureCanvas(rotateType, tempCanvas.width, tempCanvas.height);
-        // 将临时画布的内容绘制到旋转后的画布
-        this.context.drawImage(tempCanvas, 0, 0);
-        // 释放临时画布
-        tempCanvas.width = 0;
-        tempCanvas.height = 0;
-    }
-    /**
-     * 截图并绘制在 canvas 上
-     * @param rotateType 0:竖屏 1:横屏
-     */
-    takeScreenshot(rotateType = 0) {
-        this.rotateType = rotateType;
-        this.video = this.videoContainer?.querySelector("video");
-        if (this.context && this.video) {
-            const { offsetTop, offsetLeft, offsetWidth, offsetHeight } = this.video;
-            Object.assign(this.canvas, {
-                top: `${offsetTop}px`,
-                left: `${offsetLeft}px`,
-                width: offsetWidth,
-                height: offsetHeight,
-            });
-            // 清空 canvas
-            this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            // 保存当前状态
-            this.context.save();
-            // 配置画布的旋转和尺寸
-            this.configureCanvas(rotateType, offsetWidth, offsetHeight);
-            // 使用 video 的显示尺寸绘制截图
-            this.context.drawImage(this.video, 0, 0, offsetWidth, offsetHeight);
-            // 恢复画布状态
-            this.context.restore();
-        }
-        else {
-            console.log("视频未准备好或加载失败");
-        }
-    }
-    resizeScreenshot(width, height) {
-        if (this.canvas && this.context) {
-            // 保存旧的截图
-            const imageData = this.context.getImageData(0, 0, this.canvas.width, this.canvas.height);
-            // 创建一个临时 canvas
-            const tempCanvas = document.createElement("canvas");
-            const tempContext = tempCanvas.getContext("2d");
-            // 计算保持宽高比
-            const aspectRatio = imageData.width / imageData.height;
-            let newWidth, newHeight;
-            if (width / height > aspectRatio) {
-                newWidth = height * aspectRatio;
-                newHeight = height;
-            }
-            else {
-                newWidth = width;
-                newHeight = width / aspectRatio;
-            }
-            // 设置临时 canvas 尺寸
-            tempCanvas.width = newWidth;
-            tempCanvas.height = newHeight;
-            // 将旧截图绘制到临时 canvas
-            tempContext?.drawImage(this.canvas, 0, 0, imageData.width, imageData.height, 0, 0, newWidth, newHeight);
-            // 清空当前 canvas 并调整尺寸
-            this.canvas.width = width;
-            this.canvas.height = height;
-            this.context.clearRect(0, 0, width, height);
-            // 将调整后的图像绘制到当前 canvas 中
-            this.context.drawImage(tempCanvas, 0, 0, newWidth, newHeight, 0, 0, width, height);
-        }
-        else {
-            console.log("Canvas or context is not initialized.");
-        }
-    }
-    // 清除 canvas 覆盖
-    clearScreenShot() {
-        if (this.context) {
-            this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        }
-    }
-    showScreenShot() {
-        if (this.canvas) {
-            this.canvas.style.display = "block";
-        }
-    }
-    hideScreenShot() {
-        if (this.canvas) {
-            this.canvas.style.display = "none";
-        }
-    }
-    // 销毁类的实例
-    destroy() {
-        // 清除 canvas
-        this.clearScreenShot();
-        // 从 videoContainer 中移除 canvas
-        if (this.canvas.parentNode) {
-            this.canvas.parentNode.removeChild(this.canvas);
-        }
-        this.videoContainer.style.position = "";
-        // 释放引用
-        this.videoContainer = null;
-        this.video = null;
-        this.canvas = null;
-        this.context = null;
-    }
-}
-
-class MetricsReporter {
-    options;
-    keyParamsMap = new Map();
-    onceOnlyKeys = new Set();
-    reportedKeys = new Set();
-    keyQueueMap = new Map(); // 🚀 每个 key 的顺序队列
-    constructor(options) {
-        this.options = options;
-        if (options.onceOnlyKeys) {
-            this.onceOnlyKeys = new Set(options.onceOnlyKeys);
-        }
-    }
-    /** 设置或更新某个 key 的参数 */
-    addParam(key, params) {
-        // 如果是一次性事件, 并且上报过 就跳过
-        if (this.onceOnlyKeys.has(key) && this.reportedKeys.has(key)) {
-            this.log(`[skip] ${key} addParam is once-only and already reported`);
-            return;
-        }
-        const existing = this.keyParamsMap.get(key) || {};
-        const merged = { ...existing, ...params };
-        this.keyParamsMap.set(key, merged);
-        this.log(`[addParam] ${key}: ${JSON.stringify(merged)}`);
-    }
-    /** 上报某个 key（顺序保证） */
-    instant(key, extraParams) {
-        const isOnceOnly = this.onceOnlyKeys.has(key);
-        // 一次性 key 限制
-        if (isOnceOnly && this.reportedKeys.has(key)) {
-            this.log(`[skip] ${key} instant is once-only and already reported`);
-            return;
-        }
-        isOnceOnly && this.reportedKeys.add(key);
-        const { commonParams } = this.options;
-        // 生成当前 payload
-        const storedParams = this.keyParamsMap.get(key) || {};
-        const payload = {
-            eventKey: key,
-            ...commonParams,
-            ...storedParams,
-            ...extraParams,
-        };
-        // 🚀 关键逻辑：串行队列执行
-        const lastPromise = this.keyQueueMap.get(key) || Promise.resolve();
-        const nextPromise = lastPromise.then(() => this.report(payload, key)).finally(() => {
-            // 如果这是最后一个 Promise，清理它
-            if (this.keyQueueMap.get(key) === nextPromise) {
-                this.keyQueueMap.delete(key);
-                this.log(`[finally] ${key} queue cleared ${this.keyQueueMap.size}`);
-            }
-        });
-        this.keyQueueMap.set(key, nextPromise);
-    }
-    /** 实际上报逻辑 */
-    async report(data, key) {
-        const { endpoint, useBeacon } = this.options;
-        const body = JSON.stringify(data);
-        this.log(`[report] ${key} payload: ${body}`);
-        try {
-            if (useBeacon && navigator.sendBeacon) {
-                navigator.sendBeacon(endpoint, body);
-            }
-            else {
-                await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body,
-                });
-            }
-            this.log(`[done] ${key} report success`);
-        }
-        catch (err) {
-            this.log(`[error] ${key} report failed: ${err}`);
-        }
-    }
-    log(msg) {
-        if (this.options.enableLog)
-            console.log(`[MetricsReporter] ${msg}`);
-    }
-}
-
 var KeyboardMode;
 (function (KeyboardMode) {
     KeyboardMode["LOCAL"] = "local";
@@ -629,1791 +93,6 @@ var RotateDirection;
     RotateDirection[RotateDirection["PORTRAIT"] = 0] = "PORTRAIT";
     RotateDirection[RotateDirection["LANDSCAPE"] = 1] = "LANDSCAPE";
 })(RotateDirection || (RotateDirection = {}));
-
-var MediaType;
-(function (MediaType) {
-    MediaType[MediaType["AUDIO"] = 1] = "AUDIO";
-    MediaType[MediaType["VIDEO"] = 2] = "VIDEO";
-    MediaType[MediaType["AUDIO_AND_VIDEO"] = 3] = "AUDIO_AND_VIDEO";
-})(MediaType || (MediaType = {}));
-// 触摸类型枚举
-var TouchType;
-(function (TouchType) {
-    TouchType["GESTURE"] = "gesture";
-    TouchType["GESTURE_SWIPE"] = "gestureSwipe";
-    TouchType["EVENT_SDK"] = "eventSdk";
-    TouchType["KEYSTROKE"] = "keystroke";
-    TouchType["CLIPBOARD"] = "clipboard";
-    TouchType["INPUT_BOX"] = "inputBox";
-    TouchType["INPUT_STATE"] = "inputState";
-    TouchType["RTC_STATS"] = "rtcStats";
-    TouchType["KICK_OUT_USER"] = "kickOutUser";
-    TouchType["EQUIPMENT_INFO"] = "equipmentInfo";
-    TouchType["APP_UNINSTALL"] = "appUnInstall";
-})(TouchType || (TouchType = {}));
-
-class customRtc {
-    // 初始外部H5传入DomId
-    initDomId = "";
-    // video容器id
-    videoDomId = "";
-    // 鼠标、触摸事件时是否按下
-    hasPushDown = false;
-    enableMicrophone = true;
-    enableCamera = true;
-    screenShotInstance = null;
-    isFirstRotate = false;
-    metricsReporter = null;
-    remoteResolution = {
-        width: 0,
-        height: 0,
-    };
-    // 触摸信息
-    touchConfig = {
-        action: 0, // 0 按下 1 抬起 2 触摸中
-        widthPixels: document.body.clientWidth,
-        heightPixels: document.body.clientHeight,
-        pointCount: 1, // 手指操作数量
-        touchType: "gesture",
-        properties: [], // 手指id， toolType: 1写死
-        coords: [], // 操作坐标 pressure: 1.0, size: 1.0,写死
-    };
-    // 键盘快捷键监听函数
-    _listenKeyboardShortcut = () => { };
-    // 云手机容器是否处于活跃交互状态
-    isContainerActive = false;
-    // 触摸坐标信息
-    touchInfo = generateTouchCoord();
-    // 模拟触摸
-    simulateTouchInfo = generateTouchCoord();
-    options;
-    // 群控同步
-    groupControlSync = true;
-    engine = null;
-    groupEngine = null;
-    groupRtc = null;
-    inputElement = null;
-    // 当前推流状态promise 缓存
-    promiseMap = {
-        streamStatus: {
-            resolve: () => { },
-            reject: () => { },
-        },
-        injectStatus: {
-            resolve: null,
-            reject: null,
-        },
-    };
-    roomMessage = {};
-    // 回收时间定时器
-    autoRecoveryTimer = null;
-    isFirstFrame = false;
-    firstFrameCount = 0;
-    rotation = 0;
-    // 是否群控
-    isGroupControl = false;
-    // 埋点定时器
-    metricsTimer = null;
-    /**
-     * 安卓对应回车值
-     * go：前往 2
-     * search：搜索 3
-     * send：发送 4
-     * next：下一个 5
-     * done：完成 6
-     * previous：上一个 7
-     */
-    enterkeyhintObj = {
-        2: "go",
-        3: "search",
-        4: "send",
-        5: "next",
-        6: "done",
-        7: "previous",
-    };
-    // 回调函数集合
-    callbacks = {};
-    remoteUserId = "";
-    rotateType = 0;
-    videoDeviceId = "";
-    audioDeviceId = "";
-    isCameraInject = false;
-    isMicrophoneInject = false;
-    // 摄像头分辨率信息
-    cameraResolution = {
-        width: 0,
-        height: 0,
-    };
-    constructor(viewId, params, callbacks) {
-        const { masterIdPrefix, padCode } = params;
-        this.initDomId = viewId;
-        this.options = params;
-        this.callbacks = callbacks;
-        this.remoteUserId = params.padCode;
-        this.enableMicrophone = params.enableMicrophone;
-        this.enableCamera = params.enableCamera;
-        this.videoDeviceId = params.videoDeviceId;
-        this.audioDeviceId = params.audioDeviceId;
-        // 获取外部容器div元素
-        const h5Dom = document.getElementById(this.initDomId);
-        // 创建一个id为armcloudVideo的新的div元素
-        const newDiv = document.createElement("div");
-        const divId = `${masterIdPrefix}_${padCode}_armcloudVideo`;
-        newDiv.setAttribute("id", divId);
-        this.videoDomId = divId;
-        // 将div元素添加到外部容器中
-        h5Dom?.appendChild(newDiv);
-        // 创建引擎对象
-        this.createEngine();
-    }
-    /** 浏览器是否支持 */
-    // eslint-disable-next-line class-methods-use-this
-    isSupported() {
-        return VERTC.isSupported();
-    }
-    setMicrophone(val) {
-        this.enableMicrophone = val;
-    }
-    setCamera(val) {
-        this.enableCamera = val;
-    }
-    /** 设置摄像头设备 */
-    async setVideoDeviceId(val) {
-        this.videoDeviceId = val;
-        if (this.isCameraInject) {
-            return this.cameraInject();
-        }
-    }
-    /** 设置麦克风设备 */
-    async setAudioDeviceId(val) {
-        this.audioDeviceId = val;
-        if (this.isMicrophoneInject) {
-            return this.microphoneInject();
-        }
-        return;
-    }
-    /** 打开或关闭监控操作 */
-    setMonitorOperation(isMonitor, forwardOff = true) {
-        this.sendUserMessage(this.options.clientId, this.getMsgTemplate(TouchType.EVENT_SDK, {
-            type: "operateSwitch" /* MessageKey.OPERATE_SWITCH */,
-            isOpen: isMonitor,
-        }), forwardOff);
-    }
-    /** 触发无操作回收回调函数 */
-    triggerRecoveryTimeCallback() {
-        if (this.options.disable ||
-            !this.options.autoRecoveryTime ||
-            this.isCameraInject ||
-            this.isMicrophoneInject) {
-            return;
-        }
-        if (this.autoRecoveryTimer) {
-            // console.log("清除计时器");
-            clearTimeout(this.autoRecoveryTimer);
-        }
-        this.autoRecoveryTimer = setTimeout(() => {
-            console.log("触发无操作回收了");
-            this.stop();
-            this.callbacks.onAutoRecoveryTime();
-        }, this.options.autoRecoveryTime * 1000);
-    }
-    setVideoEncoder(width, height) {
-        if (!width || !height) {
-            return;
-        }
-        this.cameraResolution = {
-            width,
-            height,
-        };
-        const frameRate = 15;
-        const maxKbps = 4000;
-        console.log("设置编码器参数", width, height, frameRate, maxKbps);
-        this.engine?.setVideoEncoderConfig({
-            width,
-            height,
-            frameRate,
-            maxKbps,
-        });
-    }
-    /** 调用 createEngine 创建一个本地 Engine 引擎对象 */
-    async createEngine() {
-        if (!this.inputElement) {
-            // 若不存在inputElement， 则创建一个隐藏的input输入框
-            if (!this.options.disable && !this.options.disableLocalIME) {
-                addInputElement(this);
-            }
-        }
-        this.engine = VERTC.createEngine(this.options.appId);
-        VERTC.setParameter("ICE_CONFIG_REQUEST_URLS", [
-            "rtcg-access.volcvideos.com",
-            "rtcg-access-va.volcvideos.com",
-            "rtcg-access-fr.volcvideos.com",
-            "rtcg-access-sg.volcvideos.com",
-            "rtc-access-ag.bytedance.com",
-            "rtc-access.bytedance.com",
-            "rtc-access2-hl.bytedance.com",
-            "rtcg-access.bytevcloud.com",
-        ]);
-        this.engine?.on(VERTC.events.onLocalVideoSizeChanged, (resolution) => {
-            const { width, height } = resolution?.info || {};
-            this.setVideoEncoder(width, height);
-        });
-        /** 监听失败回调 */
-        this.engine.on(VERTC.events.onError, (error) => {
-            this.callbacks.onErrorMessage(error);
-        });
-        /** 监听播放失败回调 */
-        this.engine.on(VERTC.events.onAutoplayFailed, (e) => {
-            this.callbacks.onAutoplayFailed(e);
-        });
-        /** 用户订阅的远端音/视频流统计信息以及网络状况，统计周期为 2s */
-        this.engine.on(VERTC.events.onRemoteStreamStats, (e) => {
-            this.callbacks.onRunInformation(e);
-        });
-        /** 加入房间后，会以每2秒一次的频率，收到本端上行及下行的网络质量信息。 */
-        this.engine.on(VERTC.events.onNetworkQuality, (uplinkNetworkQuality, downlinkNetworkQuality) => {
-            this.callbacks.onNetworkQuality(uplinkNetworkQuality, downlinkNetworkQuality);
-        });
-    }
-    // 创建群控实例
-    async createGroupEngine(pads = [], config) {
-        this.groupRtc = new CustomGroupRtc({ ...this.options, ...config }, pads, this.callbacks);
-        try {
-            const example = await this.groupRtc.getEngine();
-            this.groupEngine = example.engine;
-        }
-        catch (error) {
-            this.callbacks.onGroupControlError({
-                code: error.code,
-                msg: error.message,
-            });
-        }
-    }
-    /** 手动销毁通过 createEngine 所创建的引擎对象 */
-    destroyEngine() {
-        if (this.engine)
-            VERTC.destroyEngine(this.engine);
-        if (this.groupEngine)
-            VERTC.destroyEngine(this.groupEngine);
-    }
-    /**
-     * 静音
-     */
-    muted() {
-        this.engine?.unsubscribeStream(this.options.clientId, MediaType.AUDIO);
-    }
-    /**
-     * 取消静音
-     */
-    unmuted() {
-        this.engine?.subscribeStream(this.options.clientId, MediaType.AUDIO);
-    }
-    /** 按顺序发送文本框 */
-    sendGroupInputString(pads, strs) {
-        strs?.map((v, index) => {
-            const message = JSON.stringify({
-                text: v,
-                pads: [pads[index]],
-                touchType: TouchType.INPUT_BOX,
-            });
-            this.groupRtc?.sendRoomMessage(message);
-        });
-    }
-    /**  群控剪切板  */
-    sendGroupInputClipper(pads, strs) {
-        strs?.map((v, index) => {
-            const message = JSON.stringify({
-                text: v,
-                pads: [pads[index]],
-                touchType: TouchType.CLIPBOARD,
-            });
-            this.groupRtc?.sendRoomMessage(message);
-        });
-    }
-    /** 手动开启音视频流播放 */
-    startPlay() {
-        if (this.engine)
-            this.engine.play(this.options.clientId);
-    }
-    /** 群控房间信息 */
-    async sendGroupRoomMessage(message) {
-        return await this?.groupRtc?.sendRoomMessage(message);
-    }
-    getMsgTemplate(touchType, content) {
-        return JSON.stringify({
-            touchType,
-            content: JSON.stringify(content),
-        });
-    }
-    /** 获取应用信息 */
-    getEquipmentInfo(type) {
-        this.sendUserMessage(this.options.clientId, this.getMsgTemplate(TouchType.EQUIPMENT_INFO, {
-            type,
-        }), true);
-    }
-    /** 获取注入推流状态 */
-    getInjectStreamStatus(type, timeout = 0) {
-        return new Promise((resolve) => {
-            // 创建超时处理器
-            let timeoutHandler = null;
-            if (timeout !== 0) {
-                timeoutHandler = setTimeout(() => {
-                    resolve({
-                        status: "unknown",
-                        type,
-                    });
-                }, timeout);
-            }
-            // 根据类型处理不同的流状态
-            const handleStreamStatus = () => {
-                switch (type) {
-                    case "video":
-                        try {
-                            // 保存resolve函数以便在收到响应时调用
-                            Object.assign(this.promiseMap.streamStatus, {
-                                resolve: (result) => {
-                                    if (timeoutHandler)
-                                        clearTimeout(timeoutHandler);
-                                    resolve(result);
-                                },
-                            });
-                            this.sendUserMessage(this.options.clientId, this.getMsgTemplate(TouchType.EVENT_SDK, {
-                                type: "injectionVideoStats",
-                            }), true);
-                        }
-                        catch (error) {
-                            if (timeoutHandler)
-                                clearTimeout(timeoutHandler);
-                            resolve({
-                                status: "unknown",
-                                type,
-                            });
-                        }
-                        break;
-                    case "camera":
-                        if (timeoutHandler)
-                            clearTimeout(timeoutHandler);
-                        resolve({
-                            status: this.isCameraInject ? "live" : "offline",
-                            type,
-                        });
-                        break;
-                    case "audio":
-                        if (timeoutHandler)
-                            clearTimeout(timeoutHandler);
-                        resolve({
-                            status: this.isMicrophoneInject ? "live" : "offline",
-                            type,
-                        });
-                        break;
-                }
-            };
-            handleStreamStatus();
-        });
-    }
-    /** 应用卸载 */
-    appUnInstall(pkgNames) {
-        this.sendUserMessage(this.options.clientId, this.getMsgTemplate(TouchType.APP_UNINSTALL, pkgNames), true);
-    }
-    /** 通知手机需要注入 */
-    async notifyInject(type, isOpen) {
-        await this.sendUserMessage(this.options.clientId, this.getMsgTemplate(TouchType.EVENT_SDK, {
-            type,
-            isOpen,
-        }), true);
-    }
-    /** 开启摄像头 或 麦克风注入 返回一个promise */
-    async startMediaStream(mediaType, msgData) {
-        try {
-            const res = {
-                audio: null,
-                video: null,
-            };
-            // 处理视频设备
-            if ([MediaType.VIDEO, MediaType.AUDIO_AND_VIDEO].includes(mediaType)) {
-                await this.notifyInject("injectionCamera" /* SdkEventType.INJECTION_CAMERA */, true);
-                const videoDeviceId = this.videoDeviceId || (msgData?.isFront ? "user" : "environment");
-                await this.engine?.setVideoCaptureDevice(videoDeviceId);
-                res.video = await this.engine?.startVideoCapture();
-                //  this.setVideoEncoder(res?.video?.width, res?.video?.height);
-                await this.engine?.publishStream(MediaType.VIDEO);
-                this.isCameraInject = true;
-            }
-            // 处理音频设备
-            if ([MediaType.AUDIO, MediaType.AUDIO_AND_VIDEO].includes(mediaType)) {
-                await this.notifyInject("injectionAudio" /* SdkEventType.INJECTION_AUDIO */, true);
-                if (this.audioDeviceId) {
-                    await this.engine?.setAudioCaptureDevice(this.audioDeviceId);
-                }
-                res.audio = await this.engine?.startAudioCapture();
-                await this.engine?.publishStream(MediaType.AUDIO);
-                this.isMicrophoneInject = true;
-            }
-            return res;
-        }
-        catch (error) {
-            return Promise.reject(error);
-        }
-    }
-    /** 关闭摄像头 或 麦克风注入 返回一个promise */
-    async stopMediaStream(mediaType) {
-        try {
-            const stopOperations = [];
-            // 根据媒体类型添加对应操作
-            if (mediaType === MediaType.VIDEO ||
-                mediaType === MediaType.AUDIO_AND_VIDEO) {
-                await this.notifyInject("injectionCamera" /* SdkEventType.INJECTION_CAMERA */, false);
-                stopOperations.push(this.engine?.stopVideoCapture(), this.engine?.unpublishStream(MediaType.VIDEO));
-            }
-            if (mediaType === MediaType.AUDIO ||
-                mediaType === MediaType.AUDIO_AND_VIDEO) {
-                await this.notifyInject("injectionAudio" /* SdkEventType.INJECTION_AUDIO */, false);
-                stopOperations.push(this.engine?.stopAudioCapture(), this.engine?.unpublishStream(MediaType.AUDIO));
-            }
-            // 并行执行所有停止操作
-            await Promise.all(stopOperations);
-            switch (mediaType) {
-                case MediaType.VIDEO:
-                    this.isCameraInject = false;
-                    break;
-                case MediaType.AUDIO:
-                    this.isMicrophoneInject = false;
-                    break;
-                case MediaType.AUDIO_AND_VIDEO:
-                    this.isCameraInject = false;
-                    this.isMicrophoneInject = false;
-                    break;
-            }
-        }
-        catch (error) {
-            return Promise.reject(error);
-        }
-    }
-    /** 摄像头注入 */
-    async cameraInject(msgData) {
-        try {
-            await this.stopMediaStream(MediaType.VIDEO);
-            const res = await this.startMediaStream(MediaType.VIDEO, msgData);
-            this.callbacks.onVideoInit(res.video);
-        }
-        catch (error) {
-            this.callbacks.onVideoError(error);
-            return Promise.reject(error);
-        }
-    }
-    /** 麦克风注入 */
-    async microphoneInject() {
-        try {
-            await this.stopMediaStream(MediaType.AUDIO);
-            const res = await this.startMediaStream(MediaType.AUDIO);
-            this.callbacks.onAudioInit(res.audio);
-            this.isMicrophoneInject = true;
-            return res.audio;
-        }
-        catch (error) {
-            this.callbacks.onAudioError(error);
-            this.isMicrophoneInject = false;
-            return Promise.reject(error);
-        }
-    }
-    /** 发送消息 */
-    async sendUserMessage(userId, message, notSendInGroups) {
-        try {
-            // 重置无操作回收定时器
-            this.triggerRecoveryTimeCallback();
-            !notSendInGroups &&
-                this.groupControlSync &&
-                this.sendGroupRoomMessage(message);
-            return await this.engine?.sendUserMessage(userId, message);
-        }
-        catch (error) {
-            this.callbacks?.onSendUserError(error);
-            return Promise.reject(error);
-        }
-    }
-    /** 群控退出房间 */
-    kickItOutRoom(pads) {
-        if (Array.isArray(pads)) {
-            this.groupRtc?.kickItOutRoom(pads);
-        }
-    }
-    /** 群控加入房间 */
-    joinGroupRoom(pads) {
-        const arr = pads?.filter((v) => v !== this.remoteUserId);
-        if (!arr.length || !this.isGroupControl)
-            return;
-        if (!this.groupRtc && this.isGroupControl) {
-            this.createGroupEngine(arr);
-            return;
-        }
-        this.groupRtc?.joinRoom(arr);
-    }
-    /** 进入 RTC 房间 */
-    start(isGroupControl = false, pads = []) {
-        this.isGroupControl = isGroupControl;
-        this.metricsReporter = new MetricsReporter({
-            endpoint: `${this.options.baseUrl}/traffic-info/open/traffic/rtcMonitor`,
-            commonParams: {
-                padCode: this.remoteUserId,
-                streamType: this.options.streamType,
-                sdkTerminal: "h5",
-            },
-            onceOnlyKeys: ["FirstFrame" /* ReportEventType.FIRST_FRAME */],
-            useBeacon: false,
-            enableLog: true,
-        });
-        this.metricsReporter?.addParam("FirstFrame" /* ReportEventType.FIRST_FRAME */, {
-            joinRoomTime: Date.now(),
-        });
-        this.metricsTimer = setTimeout(() => {
-            this.metricsReporter?.addParam("FirstFrame" /* ReportEventType.FIRST_FRAME */, {
-                judgeTime: Date.now(),
-                result: 0,
-            });
-            this.metricsReporter?.instant("FirstFrame" /* ReportEventType.FIRST_FRAME */);
-        }, 5000);
-        const config = {
-            appId: this.options.appId,
-            roomId: this.options.roomCode,
-            uid: this.options.userId,
-            token: this.options.roomToken,
-        };
-        this.options.mediaType === 1 || this.options.mediaType === 3;
-        this.options.mediaType === 2 || this.options.mediaType === 3;
-        this.engine
-            ?.joinRoom(config.token, config.roomId, {
-            userId: config.uid,
-        }, {
-            isAutoPublish: false, // 是否自动发布音视频流，默认为自动发布。
-            isAutoSubscribeAudio: false, // 是否自动订阅音频流，默认为自动订阅。
-            isAutoSubscribeVideo: false, // 是否自动订阅视频流，默认为自动订阅。
-        })
-            .then(async (res) => {
-            const arr = pads?.filter((v) => v !== this.remoteUserId);
-            isGroupControl && arr.length && this.createGroupEngine(arr);
-            // 加入房间成功
-            const that = this;
-            const { disableContextMenu, clientId: userId } = this.options;
-            const videoDom = document.getElementById(that.videoDomId);
-            if (videoDom) {
-                videoDom.style.width = "0px";
-                videoDom.style.height = "0px";
-                const isMobileFlag = isTouchDevice() || isMobile();
-                let eventTypeStart = "touchstart";
-                let eventTypeMove = "touchmove";
-                let eventTypeEnd = "touchend";
-                if (!isMobileFlag) {
-                    eventTypeStart = "mousedown";
-                    eventTypeMove = "mousemove";
-                    eventTypeEnd = "mouseup";
-                }
-                if (disableContextMenu) {
-                    videoDom.addEventListener("contextmenu", (e) => {
-                        e.preventDefault();
-                    });
-                }
-                // 监听鼠标滚轮事件
-                videoDom.addEventListener("wheel", (e) => {
-                    // e.preventDefault()
-                    if (this.options.disable)
-                        return;
-                    const { offsetX, offsetY, deltaY } = e;
-                    const touchConfigMousedown = {
-                        coords: [{ pressure: 1.0, size: 1.0, x: offsetX, y: offsetY }],
-                        widthPixels: videoDom.clientWidth,
-                        heightPixels: videoDom.clientHeight,
-                        pointCount: 1,
-                        properties: [{ id: 0, toolType: 1 }],
-                        touchType: "gestureSwipe",
-                        swipe: deltaY > 0 ? -1 : 1,
-                    };
-                    const messageMousedown = JSON.stringify(touchConfigMousedown);
-                    this.sendUserMessage(userId, messageMousedown);
-                });
-                /** 鼠标移出 */
-                videoDom.addEventListener("mouseleave", (e) => {
-                    e.preventDefault();
-                    if (this.options.disable)
-                        return;
-                    // 若未按下时，不发送鼠标移动事件
-                    if (!this.hasPushDown) {
-                        return;
-                    }
-                    this.touchConfig.action = 1; // 抬起
-                    const message = JSON.stringify(this.touchConfig);
-                    this.sendUserMessage(userId, message);
-                });
-                // 添加触摸事件监听器到新节点
-                // 触摸开始
-                videoDom.addEventListener(eventTypeStart, (e) => {
-                    e.preventDefault();
-                    if (this.options.disable)
-                        return;
-                    that.hasPushDown = true;
-                    const { allowLocalIMEInCloud, keyboard } = that.options;
-                    const { inputStateIsOpen } = that.roomMessage;
-                    // 处理输入框焦点逻辑
-                    const shouldHandleFocus = (allowLocalIMEInCloud && keyboard === "pad") ||
-                        keyboard === "local";
-                    if (that.inputElement &&
-                        shouldHandleFocus &&
-                        typeof inputStateIsOpen === "boolean") {
-                        inputStateIsOpen
-                            ? that.inputElement?.focus()
-                            : that.inputElement?.blur();
-                    }
-                    this.touchInfo = generateTouchCoord();
-                    // 获取节点相对于视口的位置信息
-                    const videoDomIdRect = videoDom.getBoundingClientRect();
-                    const distanceToTop = videoDomIdRect.top;
-                    const distanceToLeft = videoDomIdRect.left;
-                    // 初始化
-                    that.touchConfig.properties = [];
-                    that.touchConfig.coords = [];
-                    // 计算触摸手指数量
-                    const touchCount = isMobileFlag ? e?.touches?.length : 1;
-                    that.touchConfig.action = 0; // 按下操作
-                    that.touchConfig.pointCount = touchCount;
-                    // 手指触控节点宽高
-                    const bigSide = videoDom.clientWidth > videoDom.clientHeight
-                        ? videoDom.clientWidth
-                        : videoDom.clientHeight;
-                    const smallSide = videoDom.clientWidth > videoDom.clientHeight
-                        ? videoDom.clientHeight
-                        : videoDom.clientWidth;
-                    this.touchConfig.widthPixels =
-                        this.rotateType == 1 ? bigSide : smallSide;
-                    this.touchConfig.heightPixels =
-                        this.rotateType == 1 ? smallSide : bigSide;
-                    if (this.rotateType == 1 &&
-                        this.remoteResolution.height > this.remoteResolution.width) {
-                        this.touchConfig.widthPixels = smallSide;
-                        this.touchConfig.heightPixels = bigSide;
-                    }
-                    else if (this.rotateType == 0 &&
-                        this.remoteResolution.width > this.remoteResolution.height) {
-                        // 竖屏但是远端流是横屏（用户手动旋转屏幕）
-                        this.touchConfig.widthPixels = bigSide;
-                        this.touchConfig.heightPixels = smallSide;
-                    }
-                    for (let i = 0; i < touchCount; i += 1) {
-                        const touch = isMobileFlag ? e.touches[i] : e;
-                        that.touchConfig.properties[i] = {
-                            id: i,
-                            toolType: 1,
-                        };
-                        let x = touch.offsetX;
-                        let y = touch.offsetY;
-                        if (x == undefined) {
-                            x = touch.clientX - distanceToLeft;
-                            y = touch.clientY - distanceToTop;
-                            if (this.rotateType == 1 &&
-                                this.remoteResolution.height > this.remoteResolution.width) {
-                                x = videoDomIdRect.bottom - touch.clientY;
-                                y = touch.clientX - distanceToLeft;
-                            }
-                            else if (this.rotateType == 0 &&
-                                this.remoteResolution.width > this.remoteResolution.height) {
-                                x = touch.clientY - distanceToTop;
-                                y = videoDomIdRect.right - touch.clientX;
-                            }
-                        }
-                        that.touchConfig.coords.push({
-                            ...this.touchInfo,
-                            orientation: 0.01 * Math.random(),
-                            x: x,
-                            y: y,
-                        });
-                    }
-                    const touchConfig = {
-                        action: touchCount > 1 ? 261 : 0,
-                        widthPixels: that.touchConfig.widthPixels,
-                        heightPixels: that.touchConfig.heightPixels,
-                        pointCount: touchCount,
-                        touchType: "gesture",
-                        properties: that.touchConfig.properties,
-                        coords: that.touchConfig.coords,
-                    };
-                    const message = JSON.stringify(touchConfig);
-                    that.sendUserMessage(userId, message);
-                });
-                // 触摸中
-                videoDom.addEventListener(eventTypeMove, (e) => {
-                    e.preventDefault();
-                    if (this.options.disable)
-                        return;
-                    // 若未按下时，不发送鼠标移动事件
-                    if (!that.hasPushDown) {
-                        return;
-                    }
-                    // 获取节点相对于视口的位置信息
-                    const videoDomIdRect = videoDom.getBoundingClientRect();
-                    const distanceToTop = videoDomIdRect.top;
-                    const distanceToLeft = videoDomIdRect.left;
-                    // 计算触摸手指数量
-                    const touchCount = isMobileFlag ? e?.touches?.length : 1;
-                    that.touchConfig.action = 2; // 触摸中
-                    that.touchConfig.pointCount = touchCount;
-                    that.touchConfig.coords = [];
-                    const coords = [];
-                    for (let i = 0; i < touchCount; i += 1) {
-                        const touch = isMobileFlag ? e.touches[i] : e;
-                        that.touchConfig.properties[i] = {
-                            id: i,
-                            toolType: 1,
-                        };
-                        let x = touch.offsetX;
-                        let y = touch.offsetY;
-                        if (x == undefined) {
-                            x = touch.clientX - distanceToLeft;
-                            y = touch.clientY - distanceToTop;
-                            if (this.rotateType == 1 &&
-                                this.remoteResolution.height > this.remoteResolution.width) {
-                                x = videoDomIdRect.bottom - touch.clientY;
-                                y = touch.clientX - distanceToLeft;
-                            }
-                            else if (this.rotateType == 0 &&
-                                this.remoteResolution.width > this.remoteResolution.height) {
-                                x = touch.clientY - distanceToTop;
-                                y = videoDomIdRect.right - touch.clientX;
-                            }
-                        }
-                        coords.push({
-                            ...this.touchInfo,
-                            orientation: 0.01 * Math.random(),
-                            x: x,
-                            y: y,
-                        });
-                    }
-                    that.touchConfig.coords = coords;
-                    const touchConfig = {
-                        action: 2,
-                        widthPixels: that.touchConfig.widthPixels,
-                        heightPixels: that.touchConfig.heightPixels,
-                        pointCount: touchCount,
-                        touchType: "gesture",
-                        properties: that.touchConfig.properties,
-                        coords: that.touchConfig.coords,
-                    };
-                    const message = JSON.stringify(touchConfig);
-                    // console.log('2222触摸中', message)
-                    that.sendUserMessage(userId, message);
-                });
-                // 触摸结束
-                videoDom.addEventListener(eventTypeEnd, (e) => {
-                    e.preventDefault();
-                    if (this.options.disable)
-                        return;
-                    that.hasPushDown = false; // 按下状态重置
-                    if (isMobileFlag) {
-                        if (e.touches.length === 0) {
-                            that.touchConfig.action = 1; // 抬起
-                            const message = JSON.stringify(that.touchConfig);
-                            that.sendUserMessage(userId, message);
-                        }
-                    }
-                    else {
-                        that.touchConfig.action = 1; // 抬起
-                        const message = JSON.stringify(that.touchConfig);
-                        // console.log("触摸结束", message);
-                        that.sendUserMessage(userId, message);
-                    }
-                });
-                // 监听广播消息
-                that.onRoomMessageReceived();
-                that.onUserMessageReceived();
-                that.onUserJoined();
-                that.onUserLeave();
-                that.onRemoteVideoFirstFrame();
-                // 远端摄像头/麦克风采集音视频流的回调
-                that.onUserPublishStream();
-                this.startCV();
-                this.callbacks.onConnectSuccess();
-            }
-            /**
-             * 监听连接状态的变化
-             * @return
-             * 0 进行连接前准备，锁定相关资源,
-             * 1 连接断开,
-             * 2 首次连接，正在连接中,
-             * 3 首次连接成功,
-             * 4 连接断开后重新连接中,
-             * 5 连接断开后重连成功,
-             * 6 处于 CONNECTION_STATE_DISCONNECTED 状态超过 10 秒，且期间重连未成功。SDK将继续尝试重连
-             */
-            that.engine?.on(VERTC.events.onConnectionStateChanged, (e) => {
-                that.callbacks.onConnectionStateChanged(e);
-            });
-            // that.engine?.on(
-            //   VERTC.events.onAudioDeviceStateChanged,
-            //   debounce((e) => {
-            //     console.log("音频设备状态变化", e);
-            //     if (e.deviceState == "active" && this.enableMicrophone) {
-            //       this.microphoneInject();
-            //     }
-            //     that.callbacks?.onAudioDeviceStateChanged?.(e);
-            //   }, 500)
-            // );
-        })
-            .catch((error) => {
-            this.metricsReporter?.addParam("FirstFrame" /* ReportEventType.FIRST_FRAME */, {
-                judgeTime: Date.now(),
-                result: 0,
-            });
-            this.metricsReporter?.instant("FirstFrame" /* ReportEventType.FIRST_FRAME */);
-            console.log("进房错误", error);
-            this.callbacks.onConnectFail({ code: error.code, msg: error.message });
-        });
-    }
-    startCV() {
-        console.log("startCV", this.videoDomId);
-        this._listenKeyboardShortcut = this.listenKeyboardShortcut.bind(this);
-        this.disableKeyboardShortcut();
-        this.enableKeyboardShortcut();
-        this.bindContainerActiveState();
-    }
-    bindContainerActiveState() {
-        const container = document.getElementById(this.initDomId);
-        if (!container)
-            return;
-        container.addEventListener("mousedown", () => { this.isContainerActive = true; });
-        container.addEventListener("touchstart", () => { this.isContainerActive = true; });
-        document.addEventListener("mousedown", (e) => {
-            if (!container.contains(e.target))
-                this.isContainerActive = false;
-        });
-        document.addEventListener("touchstart", (e) => {
-            if (!container.contains(e.target))
-                this.isContainerActive = false;
-        });
-    }
-    enableKeyboardShortcut() {
-        document.addEventListener("keydown", this._listenKeyboardShortcut);
-    }
-    disableKeyboardShortcut() {
-        console.log("disableKeyboardShortcut");
-        document.removeEventListener("keydown", this._listenKeyboardShortcut);
-    }
-    /**
-   * 监听键盘快捷键
-   */
-    listenKeyboardShortcut(e) {
-        if (e.isComposing)
-            return; // 忽略输入法组合键
-        // 只在云手机视频容器处于活跃交互状态时才拦截快捷键，避免影响页面其他区域的复制/全选操作
-        if (!this.isContainerActive)
-            return;
-        const key = e.key.toLowerCase(); // 统一小写
-        const ctrlOrCmd = e.ctrlKey || e.metaKey; // Win/Linux = Ctrl, macOS = Cmd
-        if (ctrlOrCmd && key === "a") {
-            e.preventDefault();
-            this?.triggerKeyboardShortcut(8192, 29);
-        }
-        else if (ctrlOrCmd && key === "c") {
-            e.preventDefault();
-            this?.triggerKeyboardShortcut(8192, 31);
-        }
-    }
-    /** 远端用户离开房间 */
-    onUserLeave() {
-        this.engine?.on(VERTC.events.onConnectionStateChanged, (e) => {
-            console.log("onConnectionStateChanged ", e);
-            // this.disableKeyboardShortcut()
-        });
-        this.engine?.on(VERTC.events.onUserLeave, (res) => {
-            console.log("onUserLeave ", res);
-            this.disableKeyboardShortcut();
-            this.callbacks.onUserLeave(res);
-        });
-    }
-    setViewSize(width, height, rotateType = 0) {
-        const h5Dom = document.getElementById(this.initDomId);
-        const videoDom = document.getElementById(this.videoDomId);
-        if (h5Dom && videoDom) {
-            const setDimensions = (element, width, height) => {
-                element.style.width = width + "px";
-                element.style.height = height + "px";
-            };
-            // 设置宽高
-            setDimensions(h5Dom, width, height);
-            if (rotateType == 1) {
-                setDimensions(videoDom, height, width);
-                return;
-            }
-            setDimensions(videoDom, width, height);
-        }
-    }
-    async getCameraState(isRetry = false) {
-        try {
-            const userId = this.options.clientId;
-            const contentObj = {
-                type: "cameraState",
-            };
-            const messageObj = {
-                touchType: "eventSdk",
-                content: JSON.stringify(contentObj),
-            };
-            const message = JSON.stringify(messageObj);
-            const res = await this.sendUserMessage(userId, message);
-        }
-        catch (error) {
-            if (!isRetry) {
-                return;
-            }
-            setTimeout(() => {
-                this.getCameraState(false);
-            }, 1000);
-        }
-    }
-    async updateUiH5(isRetry = false) {
-        try {
-            const userId = this.options.clientId;
-            const contentObj = {
-                type: "updateUiH5",
-            };
-            const messageObj = {
-                touchType: "eventSdk",
-                content: JSON.stringify(contentObj),
-            };
-            const message = JSON.stringify(messageObj);
-            const res = await this.sendUserMessage(userId, message);
-        }
-        catch (error) {
-            if (!isRetry) {
-                return;
-            }
-            setTimeout(() => {
-                this.updateUiH5(false);
-            }, 1000);
-        }
-    }
-    // 模拟点击事件
-    triggerClickEvent(options, forwardOff = false) {
-        this.triggerPointerEvent(0, options, forwardOff);
-        setTimeout(() => {
-            this.triggerPointerEvent(1, options, forwardOff);
-        }, 15 + Math.floor(Math.random() * 11));
-    }
-    // 模拟触摸事件 0 按下 1 抬起 2 触摸中
-    triggerPointerEvent(action, options, forwardOff = false) {
-        const { x, y, width, height } = options;
-        if (action == 0) {
-            this.simulateTouchInfo = generateTouchCoord();
-        }
-        const touchInfo = {
-            action,
-            pointCount: 1,
-            touchType: "gesture",
-            widthPixels: width,
-            heightPixels: height,
-            coords: [
-                {
-                    ...this.simulateTouchInfo,
-                    orientation: 0.01 * Math.random(),
-                    x,
-                    y,
-                },
-            ],
-            properties: [
-                {
-                    id: 0,
-                    toolType: 1,
-                },
-            ],
-        };
-        const userId = this.options.clientId;
-        this.sendUserMessage(userId, JSON.stringify(touchInfo), forwardOff);
-    }
-    /** 远端可见用户加入房间 */
-    onUserJoined() {
-        const that = this;
-        this.engine?.on(VERTC.events.onUserJoined, (user) => {
-            if (user.userInfo?.userId === this.options.clientId) {
-                setTimeout(() => {
-                    that.updateUiH5(true);
-                    that.getCameraState(true);
-                    // 查询输入状态
-                    that.onCheckInputState();
-                    that.setKeyboardStyle(that.options.keyboard);
-                    that.triggerRecoveryTimeCallback();
-                    that.callbacks?.onUserJoined(user);
-                }, 300);
-            }
-        });
-    }
-    /** 视频首帧渲染 */
-    onRemoteVideoFirstFrame() {
-        this.engine?.on(VERTC.events.onRemoteVideoFirstFrame, async (event) => {
-            try {
-                if (!this.isFirstRotate) {
-                    await this.initRotateScreen(event.width, event.height);
-                }
-                this.metricsReporter?.addParam("FirstFrame" /* ReportEventType.FIRST_FRAME */, {
-                    judgeTime: Date.now(),
-                    result: 1,
-                });
-                this.metricsReporter?.instant("FirstFrame" /* ReportEventType.FIRST_FRAME */);
-            }
-            finally {
-                this.callbacks.onRenderedFirstFrame(event);
-            }
-        });
-    }
-    /** 离开 RTC 房间 */
-    async stop() {
-        try {
-            this.disableKeyboardShortcut();
-            clearTimeout(this.metricsTimer);
-            this.metricsTimer = null;
-            clearTimeout(this.autoRecoveryTimer);
-            const { clientId, mediaType } = this.options;
-            const promises = [
-                this.engine?.unsubscribeStream(this.options.clientId, mediaType),
-                this.engine?.stopAudioCapture(),
-                this.engine?.stopVideoCapture(),
-                this.engine?.leaveRoom(),
-                this.groupEngine?.leaveRoom(),
-            ];
-            await Promise.allSettled(promises);
-            this.destroyEngine();
-            this.groupRtc?.close();
-            this.screenShotInstance?.destroy();
-            const videoDomElement = document.getElementById(this.videoDomId);
-            if (videoDomElement && videoDomElement.parentNode) {
-                videoDomElement.parentNode.removeChild(videoDomElement);
-            }
-            this.inputElement?.remove();
-            this.groupEngine = null;
-            this.groupRtc = null;
-            this.screenShotInstance = null;
-        }
-        catch (error) {
-            return Promise.reject(error);
-        }
-    }
-    /** 房间内新增远端摄像头/麦克风采集音视频流的回调 */
-    onUserPublishStream() {
-        // eslint-disable-next-line @typescript-eslint/no-this-alias
-        const that = this;
-        const handleUserPublishStream = async (e) => {
-            if (e.userId === this.options.clientId) {
-                const player = document.querySelector(`#${that.videoDomId}`);
-                await this.setRemoteVideoRotation(this.rotation);
-                await this.engine?.subscribeStream(this.options.clientId, this.options.mediaType);
-                if (!this.screenShotInstance) {
-                    this.screenShotInstance = new ScreenshotOverlay(player, this.rotation);
-                }
-            }
-        };
-        this.engine?.on(VERTC.events.onUserPublishStream, handleUserPublishStream);
-    }
-    /**
-     * 发送摇一摇信息
-     */
-    sendShakeInfo(time) {
-        const userId = this.options.clientId;
-        const shake = new ShakeSimulator();
-        shake.startShakeSimulation(time, (content) => {
-            const getOptions = (sensorType) => {
-                return JSON.stringify({
-                    coords: [],
-                    heightPixels: 0,
-                    isOpenScreenFollowRotation: false,
-                    keyCode: 0,
-                    pointCount: 0,
-                    properties: [],
-                    text: "",
-                    touchType: TouchType.EVENT_SDK,
-                    widthPixels: 0,
-                    action: 0,
-                    content: JSON.stringify({
-                        ...content,
-                        type: "sdkSensor" /* SdkEventType.SDK_SENSOR */,
-                        sensorType,
-                    }),
-                });
-            };
-            this.sendUserMessage(userId, getOptions("gyroscope"));
-            this.sendUserMessage(userId, getOptions("gravity"));
-            this.sendUserMessage(userId, getOptions("acceleration"));
-        });
-    }
-    checkInputState(msg) {
-        const { allowLocalIMEInCloud, keyboard } = this.options;
-        const msgData = JSON.parse(msg.data);
-        this.roomMessage.inputStateIsOpen = msgData.isOpen;
-        // 仅在 enterkeyhint 存在时设置属性
-        const enterkeyhintText = this.enterkeyhintObj[msgData.imeOptions];
-        if (enterkeyhintText) {
-            this.inputElement?.setAttribute("enterkeyhint", enterkeyhintText);
-        }
-        // 处理输入框焦点逻辑
-        const shouldHandleFocus = (allowLocalIMEInCloud && keyboard === "pad") || keyboard === "local";
-        if (shouldHandleFocus && typeof msgData.isOpen === "boolean") {
-            msgData.isOpen ? this.inputElement?.focus() : this.inputElement?.blur();
-        }
-    }
-    /** 监听 onRoomMessageReceived 事件 */
-    onRoomMessageReceived() {
-        const onRoomMessageReceived = async (e) => {
-            if (e.message) {
-                const msg = JSON.parse(e.message);
-                // 消息透传
-                if (msg.key === "message") {
-                    this.callbacks.onTransparentMsg(0, msg.data);
-                }
-                // ui消息
-                if (msg.key === "refreshUiType") {
-                    const msgData = JSON.parse(msg.data);
-                    this.roomMessage.isVertical = msgData.isVertical;
-                    // 若宽高没变，则不重新绘制页面
-                    if (msgData.width == this.remoteResolution.width &&
-                        msgData.height == this.remoteResolution.height) {
-                        console.log("宽高没变，不重新绘制页面", this.remoteUserId);
-                        return false;
-                    }
-                    this.initRotateScreen(msgData.width, msgData.height);
-                }
-                // 云机、本机键盘使用消息
-                if (msg.key === "inputState" && this.inputElement) {
-                    this.checkInputState(msg);
-                }
-                // 将云机内容复制到本机剪切板
-                if (msg.key === "clipboard") {
-                    if (this.options.saveCloudClipboard) {
-                        const msgData = JSON.parse(msg.data);
-                        copyText(msgData?.content || "");
-                        this.callbacks.onOutputClipper(msgData);
-                    }
-                }
-            }
-        };
-        this.engine?.on(VERTC.events.onRoomMessageReceived, onRoomMessageReceived);
-    }
-    /** 监听 onUserMessageReceived 事件 */
-    onUserMessageReceived() {
-        const that = this;
-        const parseResolution = (resolution) => {
-            const [width, height] = resolution?.split("*").map(Number);
-            return { width, height };
-        };
-        const onUserMessageReceived = async (e) => {
-            if (e.message) {
-                const msg = JSON.parse(e.message);
-                if (msg.key === "callBack" /* MessageKey.CALL_BACK_EVENT */) {
-                    const callData = JSON.parse(msg.data);
-                    const result = JSON.parse(callData.data);
-                    switch (callData.type) {
-                        case "definition" /* MessageKey.DEFINITION */:
-                            this.callbacks.onChangeResolution({
-                                from: parseResolution(result.from),
-                                to: parseResolution(result.to),
-                            });
-                            break;
-                        case "startVideoInjection" /* MessageKey.START_INJECTION_VIDEO */:
-                        case "stopVideoInjection" /* MessageKey.STOP_INJECTION_VIDEO */:
-                            const { resolve: injectResolve } = this.promiseMap.injectStatus;
-                            if (injectResolve) {
-                                injectResolve({
-                                    type: callData.type,
-                                    status: result?.isSuccess ? "success" : "error",
-                                    result,
-                                });
-                                this.promiseMap.injectStatus.resolve = null;
-                            }
-                            this.callbacks?.onInjectVideoResult(callData.type, result);
-                            break;
-                        case "injectionVideoStats" /* MessageKey.INJECTION_VIDEO_STATS */:
-                            const { resolve } = this.promiseMap.streamStatus;
-                            resolve({
-                                path: result.path,
-                                status: result.status || (result.path ? "live" : "offline"),
-                                type: "video",
-                            });
-                            break;
-                        case "operateSwitch" /* MessageKey.OPERATE_SWITCH */:
-                            this.callbacks?.onMonitorOperation(result);
-                            break;
-                    }
-                }
-                if (msg.key === "equipmentInfo" /* MessageKey.EQUIPMENT_INFO */) {
-                    this.callbacks?.onEquipmentInfo(JSON.parse(msg.data || []));
-                }
-                if (msg.key === "inputAdb" /* MessageKey.INPUT_ADB */) {
-                    this.callbacks?.onAdbOutput(JSON.parse(msg.data || {}));
-                }
-                // 音视频采集
-                if (msg.key === "videoAndAudioControl" /* MessageKey.VIDEO_AND_AUDIO_CONTROL */) {
-                    const msgData = JSON.parse(msg.data);
-                    this.callbacks.onMediaDevicesToggle({
-                        type: "media",
-                        enabled: msgData.isOpen,
-                        isFront: msgData.isFront,
-                    });
-                    if (!this.enableMicrophone && !this.enableCamera) {
-                        return;
-                    }
-                    const pushType = this.enableMicrophone && this.enableCamera
-                        ? MediaType.AUDIO_AND_VIDEO
-                        : this.enableCamera
-                            ? MediaType.VIDEO
-                            : MediaType.AUDIO;
-                    if (msgData.isOpen) {
-                        if (this.enableCamera) {
-                            await this.cameraInject(msgData);
-                        }
-                        if (this.enableMicrophone) {
-                            await this.microphoneInject();
-                        }
-                    }
-                    else {
-                        await this.stopMediaStream(pushType);
-                    }
-                }
-                // 云机、本机键盘使用消息
-                if (msg.key === "inputState" /* MessageKey.INPUT_STATE */ && this.inputElement) {
-                    this.checkInputState(msg);
-                }
-                // 视频采集
-                if (msg.key === "videoControl" /* MessageKey.VIDEO_CONTROL */) {
-                    const msgData = JSON.parse(msg.data);
-                    this.callbacks.onMediaDevicesToggle({
-                        type: "camera",
-                        enabled: msgData.isOpen,
-                        isFront: msgData.isFront,
-                    });
-                    if (!this.enableCamera) {
-                        return;
-                    }
-                    if (msgData.isOpen) {
-                        await this.cameraInject(msgData);
-                    }
-                    else {
-                        await this.stopMediaStream(MediaType.VIDEO);
-                    }
-                }
-                // 音频采集
-                if (msg.key === "audioControl" /* MessageKey.AUDIO_CONTROL */) {
-                    const msgData = JSON.parse(msg.data);
-                    this.callbacks.onMediaDevicesToggle({
-                        type: "microphone",
-                        enabled: msgData.isOpen,
-                    });
-                    if (!this.enableMicrophone) {
-                        return;
-                    }
-                    if (msgData.isOpen) {
-                        await this.microphoneInject();
-                    }
-                    else {
-                        await this.stopMediaStream(MediaType.AUDIO);
-                    }
-                }
-            }
-        };
-        that.engine?.on(VERTC.events.onUserMessageReceived, onUserMessageReceived);
-    }
-    /**
-     * 将字符串发送到云手机的粘贴板中
-     * @param inputStr 需要发送的字符串
-     */
-    async sendInputClipper(inputStr, forwardOff = false) {
-        const userId = this.options.clientId;
-        const message = JSON.stringify({
-            text: inputStr,
-            touchType: TouchType.CLIPBOARD,
-        });
-        await this.sendUserMessage(userId, message, forwardOff);
-    }
-    /**
-     * 当云手机处于输入状态时，将字符串直接发送到云手机，完成输入
-     * @param inputStr 需要发送的字符串
-     */
-    async sendInputString(inputStr, forwardOff = false) {
-        const userId = this.options.clientId;
-        const message = JSON.stringify({
-            text: inputStr,
-            touchType: TouchType.INPUT_BOX,
-        });
-        await this.sendUserMessage(userId, message, forwardOff);
-    }
-    /** 清晰度切换 */
-    setStreamConfig(config, forwardOff = true) {
-        const regExp = /^[1-9]\d*$/;
-        // 判断字段是否缺失
-        if (config.definitionId && config.framerateId && config.bitrateId) {
-            const values = Object.values(config);
-            // 判断输入值是否为正整数
-            if (values.every((value) => regExp.test(value))) {
-                const contentObj = {
-                    type: "definitionUpdata" /* SdkEventType.DEFINITION_UPDATE */,
-                    definitionId: config.definitionId,
-                    framerateId: config.framerateId,
-                    bitrateId: config.bitrateId,
-                };
-                const messageObj = {
-                    touchType: TouchType.EVENT_SDK,
-                    content: JSON.stringify(contentObj),
-                };
-                const userId = this.options.clientId;
-                const message = JSON.stringify(messageObj);
-                this.sendUserMessage(userId, message, forwardOff);
-            }
-        }
-    }
-    /**
-     * 暂停接收来自远端的媒体流
-     * 该方法仅暂停远端流的接收，并不影响远端流的采集和发送。
-     * @param mediaType 1 只控制音频; 2 只控制视频; 3 同时控制音频和视频
-     */
-    pauseAllSubscribedStream(mediaType = 3) {
-        // 重置无操作回收定时器
-        this.triggerRecoveryTimeCallback();
-        const contentObj = {
-            type: "openAudioAndVideo" /* MediaOperationType.OPEN_AUDIO_AND_VIDEO */,
-            isOpen: false,
-        };
-        const messageObj = {
-            touchType: TouchType.EVENT_SDK,
-            content: JSON.stringify(contentObj),
-        };
-        const userId = this.options.clientId;
-        const message = JSON.stringify(messageObj);
-        this.engine?.sendUserMessage(userId, message);
-        return this.engine?.pauseAllSubscribedStream(mediaType);
-    }
-    /**
-     * 恢复接收来自远端的媒体流
-     * 该方法仅恢复远端流的接收，并不影响远端流的采集和发送。
-     * @param mediaType 1 只控制音频; 2 只控制视频; 3 同时控制音频和视频
-     */
-    resumeAllSubscribedStream(mediaType = 3) {
-        // 重置无操作回收定时器
-        this.triggerRecoveryTimeCallback();
-        // 防止用户在自动拉取音视频流失败时，没手动开启
-        this.startPlay();
-        if (mediaType !== 3) {
-            return this.engine?.resumeAllSubscribedStream(mediaType);
-        }
-        const contentObj = {
-            type: "openAudioAndVideo" /* MediaOperationType.OPEN_AUDIO_AND_VIDEO */,
-            isOpen: true,
-        };
-        const messageObj = {
-            touchType: TouchType.EVENT_SDK,
-            content: JSON.stringify(contentObj),
-        };
-        const userId = this.options.clientId;
-        const message = JSON.stringify(messageObj);
-        this.sendUserMessage(userId, message);
-        return this.engine?.resumeAllSubscribedStream(mediaType);
-    }
-    async setRemoteVideoRotation(rotation) {
-        const player = document.querySelector(`#${this.videoDomId}`);
-        await this.engine?.setRemoteVideoPlayer(StreamIndex.STREAM_INDEX_MAIN, {
-            userId: this.options.clientId,
-            renderDom: player,
-            renderMode: 2,
-            rotation,
-        });
-    }
-    // 修改屏幕分辨率和dpi
-    setScreenResolution(options, forwardOff = true) {
-        const contentObj = options.type === "updateDensity" /* MessageKey.UPDATE_DENSITY */
-            ? {
-                type: options.type,
-                width: options.width,
-                height: options.height,
-                density: options.dpi,
-            }
-            : {
-                type: options.type,
-            };
-        const userId = this.options.clientId;
-        const message = this.getMsgTemplate(TouchType.EVENT_SDK, contentObj);
-        this.sendUserMessage(userId, message, forwardOff);
-    }
-    /**
-     * 订阅房间内指定的通过摄像头/麦克风采集的媒体流。
-     */
-    async subscribeStream(mediaType) {
-        return await this.engine?.subscribeStream(this.options.clientId, mediaType);
-    }
-    /** 旋转截图 */
-    setScreenshotRotation(rotation = 0) {
-        // this.screenShotInstance?.setScreenshotRotation(rotation);
-    }
-    /** 生成封面图 */
-    takeScreenshot(rotation = 0) {
-        this.screenShotInstance?.takeScreenshot(rotation);
-    }
-    /** 重新设置大小 */
-    resizeScreenshot(width, height) {
-        this.screenShotInstance?.resizeScreenshot(width, height);
-    }
-    /** 显示封面图 */
-    showScreenShot() {
-        this.screenShotInstance?.showScreenShot();
-    }
-    /** 显示封面图 */
-    hideScreenShot() {
-        this.screenShotInstance?.hideScreenShot();
-    }
-    /** 清空封面图 */
-    clearScreenShot() {
-        this.screenShotInstance?.clearScreenShot();
-    }
-    /**
-     * 取消订阅房间内指定的通过摄像头/麦克风采集的媒体流。
-     */
-    unsubscribeStream(mediaType) {
-        return this.engine?.unsubscribeStream(this.options.clientId, mediaType);
-    }
-    /** 截图-保存到本地 */
-    saveScreenShotToLocal() {
-        const userId = this.options.clientId;
-        return this.engine?.takeRemoteSnapshot(userId, 0);
-    }
-    /** 截图-保存到云机 */
-    saveScreenShotToRemote() {
-        const contentObj = {
-            type: "localScreenshot" /* SdkEventType.LOCAL_SCREENSHOT */,
-        };
-        const messageObj = {
-            touchType: TouchType.EVENT_SDK,
-            content: JSON.stringify(contentObj),
-        };
-        const userId = this.options.clientId;
-        const message = JSON.stringify(messageObj);
-        this.sendUserMessage(userId, message);
-    }
-    /**
-     * 手动横竖屏：0竖屏，1横屏
-     * 对标百度API
-     */
-    setPhoneRotation(type) {
-        this.triggerRecoveryTimeCallback();
-        this.rotateScreen(type);
-    }
-    getRotateType() {
-        return this.rotateType;
-    }
-    async initRotateScreen(width, height) {
-        // 移动端需要强制竖屏
-        if (isTouchDevice() || isMobile()) {
-            this.options.rotateType = 0;
-        }
-        const { rotateType } = this.options;
-        if (rotateType && this.isFirstRotate) {
-            return;
-        }
-        /** 是否首次旋转 */
-        if (!this.isFirstRotate) {
-            this.isFirstRotate = true;
-        }
-        // 存储云机分辨率
-        Object.assign(this.remoteResolution, {
-            width,
-            height,
-        });
-        // 0 为竖屏，1 为横屏
-        let targetRotateType;
-        // 判断是否为 0 或 1
-        if (rotateType == 0 || rotateType == 1) {
-            targetRotateType = rotateType;
-        }
-        else {
-            // 根据宽高自动设置旋转类型，
-            targetRotateType = width > height ? 1 : 0;
-        }
-        await this.rotateScreen(targetRotateType);
-    }
-    /**
-     * 旋转屏幕
-     * @param type 横竖屏：0竖屏，1横屏
-     */
-    async rotateScreen(type) {
-        this.rotateType = type;
-        try {
-            await this.callbacks?.onBeforeRotate(type);
-        }
-        catch (error) { }
-        // 获取父元素（调用方）的原始宽度和高度，这里要重新获取，因为外层的div可能宽高发生变化
-        const h5Dom = document.getElementById(this.initDomId);
-        if (!h5Dom)
-            return;
-        let parentWidth = h5Dom.clientWidth > window.innerWidth
-            ? window.innerWidth
-            : h5Dom.clientWidth;
-        let parentHeight = h5Dom.clientHeight > window.innerHeight
-            ? window.innerHeight
-            : h5Dom.clientHeight;
-        let bigSide = parentHeight;
-        let smallSide = parentWidth;
-        if (parentWidth > parentHeight) {
-            bigSide = parentWidth;
-            smallSide = parentHeight;
-        }
-        const wrapperBox = h5Dom.parentElement;
-        const wrapperBoxWidth = wrapperBox.clientWidth;
-        const toolsWidth = this.options.toolsWidth ?? 0;
-        if (type == RotateDirection.LANDSCAPE) {
-            if (toolsWidth) {
-                parentWidth =
-                    bigSide > wrapperBoxWidth ? wrapperBoxWidth - toolsWidth : bigSide;
-            }
-            else {
-                parentWidth = bigSide;
-            }
-            parentHeight = smallSide;
-        }
-        else {
-            parentWidth = smallSide;
-            parentHeight = bigSide;
-        }
-        h5Dom.style.width = parentWidth + "px";
-        h5Dom.style.height = parentHeight + "px";
-        const videoIsLandscape = this.remoteResolution.width > this.remoteResolution.height;
-        // 外层 div
-        let armcloudVideoWidth = 0;
-        let armcloudVideoHeight = 0;
-        // 旋转角度
-        let videoWrapperRotate = 0;
-        const videoDom = document.getElementById(this.videoDomId);
-        if (type == 1) {
-            const w = videoIsLandscape
-                ? this.remoteResolution.width
-                : this.remoteResolution.height;
-            const h = videoIsLandscape
-                ? this.remoteResolution.height
-                : this.remoteResolution.width;
-            const scale = Math.min(parentWidth / w, parentHeight / h);
-            armcloudVideoWidth = w * scale;
-            armcloudVideoHeight = h * scale;
-            videoWrapperRotate = videoIsLandscape ? 0 : 270;
-        }
-        else {
-            // 竖屏处理
-            const w = videoIsLandscape
-                ? this.remoteResolution.height
-                : this.remoteResolution.width;
-            const h = videoIsLandscape
-                ? this.remoteResolution.width
-                : this.remoteResolution.height;
-            const scale = Math.min(parentWidth / w, parentHeight / h);
-            armcloudVideoWidth = w * scale;
-            armcloudVideoHeight = h * scale;
-            videoWrapperRotate = videoIsLandscape ? 90 : 0;
-        }
-        this.rotation = videoWrapperRotate;
-        // armcloudVideo
-        videoDom.style.width = `${armcloudVideoWidth}px`;
-        videoDom.style.height = `${armcloudVideoHeight}px`;
-        await this.setRemoteVideoRotation(videoWrapperRotate);
-        this.callbacks.onChangeRotate(type, {
-            width: armcloudVideoWidth,
-            height: armcloudVideoHeight,
-        });
-    }
-    /** 触发快捷键 */
-    triggerKeyboardShortcut(metaState, keyCode, forwardOff = true) {
-        const content = JSON.stringify({
-            touchType: "shortcutKey" /* MessageKey.SHORTCUT_KEY */,
-            metaState: metaState + "",
-            keyCode: keyCode + "",
-        });
-        const userId = this.options.clientId;
-        this.sendUserMessage(userId, content, forwardOff);
-    }
-    /** 手动定位 */
-    setGPS(longitude, latitude) {
-        const contentObj1 = {
-            latitude,
-            longitude,
-            time: new Date().getTime(),
-        };
-        const contentObj2 = {
-            type: "sdkLocation",
-            content: JSON.stringify(contentObj1),
-        };
-        const messageObj = {
-            touchType: "eventSdk",
-            content: JSON.stringify(contentObj2),
-        };
-        const userId = this.options.clientId;
-        const message = JSON.stringify(messageObj);
-        console.log("手动传入经纬度", message);
-        this.sendUserMessage(userId, message);
-    }
-    /** 停止或开启群控同步 */
-    toggleGroupControlSync(flag = true) {
-        if (!this.isGroupControl)
-            return;
-        this.groupControlSync = flag;
-    }
-    executeAdbCommand(command, forwardOff = true) {
-        const userId = this.options.clientId;
-        const message = JSON.stringify({
-            touchType: "eventSdk",
-            content: JSON.stringify({
-                type: "inputAdb",
-                content: command,
-            }),
-        });
-        this.sendUserMessage(userId, message, forwardOff);
-    }
-    /** 云机/本地键盘切换(false-云机键盘，true-本地键盘) */
-    setKeyboardStyle(keyBoardType) {
-        const contentObj = {
-            type: "keyBoardType",
-            isLocalKeyBoard: keyBoardType === "local",
-        };
-        const messageObj = {
-            touchType: "eventSdk",
-            content: JSON.stringify(contentObj),
-        };
-        const userId = this.options.clientId;
-        const message = JSON.stringify(messageObj);
-        this.options.keyboard = keyBoardType;
-        this.sendUserMessage(userId, message);
-    }
-    /** 查询输入状态 */
-    async onCheckInputState() {
-        const userId = this.options.clientId;
-        const message = JSON.stringify({
-            touchType: "inputState",
-        });
-        await this.sendUserMessage(userId, message);
-    }
-    /**
-     * 设置无操作回收时间
-     * @param second 秒 默认300s,最大7200s
-     */
-    setAutoRecycleTime(second) {
-        // 设置过期时间，单位为毫秒
-        this.options.autoRecoveryTime = second;
-        // 定时器，当指定时间内无操作时执行离开房间操作
-        this.triggerRecoveryTimeCallback();
-    }
-    /** 获取无操作回收时间 */
-    getAutoRecycleTime() {
-        return this.options.autoRecoveryTime;
-    }
-    /** 调整坐标 */
-    reshapeWindow() { }
-    /** 底部栏操作按键 */
-    sendCommand(command, forwardOff = false) {
-        // 定义按键映射表 兼容老版本
-        const keyCodeMap = {
-            back: 4,
-            home: 3,
-            menu: 187,
-        };
-        // 获取keyCode,如果command不在映射表中则使用command本身
-        const keyCode = keyCodeMap[command] ?? command;
-        const messageObj = {
-            action: 1,
-            touchType: "keystroke",
-            keyCode,
-            text: "",
-        };
-        const userId = this.options.clientId;
-        if (!userId)
-            return;
-        const message = JSON.stringify(messageObj);
-        this.sendUserMessage(userId, message, forwardOff);
-    }
-    /**  注入视频到相机 */
-    injectVideoStream(type, options, timeout = 0, forwardOff = true) {
-        return new Promise(async (resolve) => {
-            const userId = this.options.clientId;
-            if (!userId)
-                return;
-            let timeoutHandler = null;
-            if (timeout) {
-                timeoutHandler = setTimeout(() => {
-                    resolve({
-                        type,
-                        status: "timeout",
-                        result: null,
-                    });
-                }, timeout);
-            }
-            try {
-                // 保存resolve函数以便在收到响应时调用
-                Object.assign(this.promiseMap.injectStatus, {
-                    resolve: (result) => {
-                        if (timeoutHandler)
-                            clearTimeout(timeoutHandler);
-                        resolve(result);
-                    },
-                });
-                const message = JSON.stringify({
-                    touchType: TouchType.EVENT_SDK,
-                    content: JSON.stringify(type === "startVideoInjection" /* MessageKey.START_INJECTION_VIDEO */
-                        ? {
-                            type,
-                            fileUrl: options?.fileUrl,
-                            isLoop: options?.isLoop ?? true,
-                            fileName: options?.fileName,
-                        }
-                        : {
-                            type,
-                        }),
-                });
-                await this.sendUserMessage(userId, message, forwardOff);
-            }
-            catch {
-                resolve({
-                    type,
-                    status: "unknown",
-                    result: null,
-                });
-            }
-        });
-    }
-    /** 音量增加按键事件 */
-    increaseVolume(forwardOff = true) {
-        // 防止用户在自动拉取音视频流失败时，没手动开启
-        this.startPlay();
-        const messageObj = {
-            action: 1,
-            touchType: TouchType.KEYSTROKE,
-            keyCode: 24,
-            text: "",
-        };
-        const userId = this.options.clientId;
-        const message = JSON.stringify(messageObj);
-        if (userId) {
-            // 按下
-            this.sendUserMessage(userId, message, forwardOff);
-        }
-    }
-    /** 音量减少按键事件 */
-    decreaseVolume(forwardOff = true) {
-        // 防止用户在自动拉取音视频流失败时，没手动开启
-        this.startPlay();
-        const messageObj = {
-            action: 1,
-            touchType: TouchType.KEYSTROKE,
-            keyCode: 25,
-            text: "",
-        };
-        const userId = this.options.clientId;
-        const message = JSON.stringify(messageObj);
-        if (userId) {
-            // 按下
-            this.sendUserMessage(userId, message, forwardOff);
-        }
-    }
-    /**
-     * 是否接收粘贴板内容回调
-     * @param flag true:接收 false:不接收
-     */
-    saveCloudClipboard(flag) {
-        this.options.saveCloudClipboard = flag;
-    }
-}
 
 const COMMON_CODE = {
     SUCCESS: 0,
@@ -2535,7 +214,58 @@ const PROGRESS_INFO = {
     },
 };
 
-class WebGroupRTC {
+const blobToText = (blob) => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            resolve(reader.result); // 读取结果为文本
+        };
+        reader.onerror = () => {
+            reject(new Error("Failed to read blob as text"));
+        };
+        reader.readAsText(blob); // 读取 Blob 为文本
+    });
+};
+const arrayBufferToText = (buffer) => {
+    if (typeof TextDecoder !== "undefined") {
+        const decoder = new TextDecoder("utf-8");
+        return decoder.decode(buffer);
+    }
+    else {
+        return String.fromCharCode.apply(null, new Uint8Array(buffer));
+    }
+};
+const checkType = (input) => {
+    if (input instanceof ArrayBuffer) {
+        return "ArrayBuffer";
+    }
+    else if (input instanceof Blob) {
+        return "Blob";
+    }
+    else {
+        return "String";
+    }
+};
+/** 判断是否是手机 */
+const isMobile = () => {
+    const flag = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile\//i.test(
+    // eslint-disable-next-line comma-dangle
+    navigator.userAgent);
+    return flag;
+};
+const isTouchDevice = () => !!("ontouchstart" in document.documentElement);
+const waitStyleApplied = async (el) => {
+    void el.offsetWidth;
+    await nextFrame();
+};
+const nextFrame = () => {
+    return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+};
+const copyText = (text) => {
+    return copy(text);
+};
+
+class WebGroupRtc {
     params = null; // 传入的参数
     pingTimer = null;
     callbacks = null; // 回调函数
@@ -2558,6 +288,15 @@ class WebGroupRTC {
         this.sourceArr = [];
         this.socket?.close();
         this.socket = null;
+    }
+    kickItOutRoom(pads) {
+        this.sendMessage(JSON.stringify({
+            event: "broadcastMsg",
+            data: JSON.stringify({
+                touchType: "kickOutUser",
+                content: JSON.stringify(pads),
+            }),
+        }));
     }
     // 发送消息给 WebSocket 服务端
     sendMessage(message) {
@@ -2622,7 +361,7 @@ class WebGroupRTC {
             ? "/manage/rtc/room/share/applyToken"
             : `/sdk/rtc/open/room/sdk/share/applyToken`;
         const tok = manageToken || token;
-        axios
+        return axios
             .post(url, {
             userId: userId || "",
             uuid: uuid || "",
@@ -2783,26 +522,192 @@ class VideoElement {
     }
 }
 
-class WebRTC {
-    // 初始外部H5传入DomId
-    initDomId = "";
-    // video容器id
+var MediaType;
+(function (MediaType) {
+    MediaType[MediaType["AUDIO"] = 1] = "AUDIO";
+    MediaType[MediaType["VIDEO"] = 2] = "VIDEO";
+    MediaType[MediaType["AUDIO_AND_VIDEO"] = 3] = "AUDIO_AND_VIDEO";
+})(MediaType || (MediaType = {}));
+// 触摸类型枚举
+var TouchType;
+(function (TouchType) {
+    TouchType["GESTURE"] = "gesture";
+    TouchType["GESTURE_SWIPE"] = "gestureSwipe";
+    TouchType["EVENT_SDK"] = "eventSdk";
+    TouchType["KEYSTROKE"] = "keystroke";
+    TouchType["CLIPBOARD"] = "clipboard";
+    TouchType["INPUT_BOX"] = "inputBox";
+    TouchType["INPUT_STATE"] = "inputState";
+    TouchType["RTC_STATS"] = "rtcStats";
+    TouchType["KICK_OUT_USER"] = "kickOutUser";
+    TouchType["EQUIPMENT_INFO"] = "equipmentInfo";
+    TouchType["APP_UNINSTALL"] = "appUnInstall";
+})(TouchType || (TouchType = {}));
+
+const generateTouchCoord = () => {
+    const params = {
+        pressure: 0.5 + 0.3 * Math.random(),
+        size: 0.05 + 0.03 * Math.random(),
+        touchMajor: 80 + Math.floor(130 * Math.random()),
+        touchMinor: 0,
+        toolMajor: 0,
+        toolMinor: 0,
+    };
+    params.touchMinor = params.touchMajor - (15 + Math.floor(30 * Math.random()));
+    params.toolMajor = params.touchMajor;
+    params.toolMinor = params.touchMinor;
+    return params;
+};
+
+const KEY_CODE_MAP = {
+    ArrowUp: 19,
+    ArrowDown: 20,
+    ArrowLeft: 21,
+    ArrowRight: 22,
+    Enter: 66,
+    Backspace: 67,
+};
+
+class InputService {
+    rtc;
+    inputElement = null;
+    isComposing = false;
+    constructor(rtc) {
+        this.rtc = rtc;
+    }
+    /**
+     * Khởi tạo hidden input cho IME (mobile/local keyboard)
+     * @param containerId DOM ID của container
+     * @param options Cấu hình (disableLocalIME, etc.)
+     */
+    initIme(containerId, options = {}) {
+        if (options.disableLocalIME)
+            return;
+        if (!isMobile())
+            return;
+        const container = document.getElementById(containerId);
+        if (!container)
+            return;
+        // Tránh khởi tạo nhiều lần
+        if (this.inputElement)
+            return;
+        const el = document.createElement("textarea");
+        el.autocomplete = "off";
+        el.className = "play-text-input";
+        el.style.cssText = `
+        position:absolute;
+        top:0;
+        left:0;
+        pointer-events:none;
+        opacity:0.01;
+        width:100%;
+        max-width:95%;
+        height: 40px;
+        resize: none;
+        overflow: hidden;
+    `;
+        el.addEventListener("compositionstart", () => {
+            this.isComposing = true;
+        });
+        el.addEventListener("compositionend", (e) => {
+            this.isComposing = false;
+            const target = e.target;
+            this.rtc.sendInputString(target.value);
+            el.value = "";
+        });
+        el.addEventListener("input", (e) => {
+            if (this.isComposing)
+                return;
+            const target = e.target;
+            this.rtc.sendInputString(target.value);
+            el.value = "";
+        });
+        el.addEventListener("keydown", (e) => {
+            const code = KEY_CODE_MAP[e.key];
+            if (code !== undefined) {
+                if (e.key === "Enter")
+                    el.blur();
+                this.rtc.triggerKeyboardShortcut?.(0, code);
+            }
+        });
+        container.appendChild(el);
+        container.style.position = "relative";
+        this.inputElement = el;
+    }
+    getInputElement() {
+        return this.inputElement;
+    }
+    focus() {
+        this.inputElement?.focus();
+    }
+    blur() {
+        this.inputElement?.blur();
+    }
+    destroy() {
+        this.inputElement?.remove();
+        this.inputElement = null;
+    }
+}
+
+class BaseRtc {
+    initDomId;
+    options;
+    callbacks;
     videoDomId = "";
-    remoteVideoContainerId = "";
-    remoteVideoId = "";
-    screenShotInstance = null;
-    pingTimer = null;
-    // 鼠标、触摸事件时是否按下
+    remoteUserId = "";
+    isCameraInject = false;
+    isMicrophoneInject = false;
     hasPushDown = false;
-    // 刷新ui消息次数
-    refreshUiMsgNumber = 0;
-    isVideoFirstFrame = false;
     enableMicrophone = true;
     enableCamera = true;
     videoDeviceId = "";
     audioDeviceId = "";
-    isCameraInject = false;
-    isMicrophoneInject = false;
+    isGroupControl = false;
+    inputService;
+    groupRtc = null;
+    constructor(initDomId, options, callbacks) {
+        this.initDomId = initDomId;
+        this.options = options;
+        this.callbacks = callbacks;
+        this.setupCallbacks();
+        this.inputService = new InputService(this); // Cast to any to avoid incomplete abstract class issues during init
+    }
+    setupCallbacks() {
+        if (!this.callbacks) {
+            this.callbacks = {};
+        }
+    }
+    getRequestId() {
+        return this.options.requestId || "";
+    }
+    createVideoContainer(padCode, masterIdPrefix) {
+        const videoDomId = `${masterIdPrefix}_${padCode}_armcloudVideo`;
+        this.videoDomId = videoDomId;
+        const videoContainer = document.createElement("div");
+        videoContainer.id = videoDomId;
+        videoContainer.style.position = "relative";
+        const parentContainer = document.getElementById(this.initDomId);
+        if (parentContainer) {
+            parentContainer.appendChild(videoContainer);
+        }
+        return videoContainer;
+    }
+    getMsgTemplate(touchType, content) {
+        return JSON.stringify({
+            touchType,
+            content: typeof content === "string" ? content : JSON.stringify(content),
+        });
+    }
+}
+
+class WebRtc extends BaseRtc {
+    remoteVideoContainerId = "";
+    remoteVideoId = "";
+    screenShotInstance = null;
+    pingTimer = null;
+    // 刷新ui消息次数
+    refreshUiMsgNumber = 0;
+    isVideoFirstFrame = false;
     // 群控同步
     groupControlSync = true;
     // 当前推流状态promise 缓存
@@ -2824,7 +729,6 @@ class WebRTC {
         inputStateIsOpen: false,
         isVertical: true,
     };
-    options;
     // websocket
     socket;
     retryCount;
@@ -2832,8 +736,6 @@ class WebRTC {
     retryTime;
     remotePc = null;
     dataChannel;
-    remoteUserId;
-    inputElement;
     // 回收时间定时器
     autoRecoveryTimer = null;
     // 运行信息定时器
@@ -2869,7 +771,6 @@ class WebRTC {
     };
     socketParams;
     // 回调函数集合
-    callbacks = {};
     videoStreams = [];
     audioStreams = [];
     videoSenders = [];
@@ -2877,17 +778,14 @@ class WebRTC {
     senderVideoTracks = [];
     senderAudioTracks = [];
     // 是否群控
-    isGroupControl = false;
-    groupRtc = null;
     groupPads = [];
     masterIdPrefix = "";
     stopOperation = false;
     videoElement = null;
     constructor(viewId, params, callbacks) {
-        this.initDomId = viewId;
-        this.options = params;
+        super(viewId, params, callbacks);
         const whileCallList = ["onAutoRecoveryTime"];
-        callbacks &&
+        if (callbacks) {
             Object.keys(callbacks).forEach((key) => {
                 const originalCallback = callbacks[key];
                 this.callbacks[key] = (...args) => {
@@ -2897,6 +795,7 @@ class WebRTC {
                     }
                 };
             });
+        }
         this.enableMicrophone = params.enableMicrophone;
         this.enableCamera = params.enableCamera;
         this.remoteUserId = params.padCode;
@@ -2906,31 +805,31 @@ class WebRTC {
         this.masterIdPrefix = params.masterIdPrefix;
         this.videoDeviceId = params.videoDeviceId || "";
         this.audioDeviceId = params.audioDeviceId || "";
-        // 获取外部容器div元素
+        // 获取外部容器 div 元素
         const h5Dom = document.getElementById(this.initDomId);
         this.videoElement = new VideoElement(this.masterIdPrefix, this.remoteUserId);
-        // 获取video元素
+        // 获取 video 元素
         this.videoDomId = this.videoElement?.getVideoDomId();
         this.remoteVideoContainerId = this.videoElement?.getContainerId();
         this.remoteVideoId = this.videoElement?.getRemoteVideoId();
         const videoContainer = this.videoElement?.createElements();
-        // 将div元素添加到外部容器中
+        // 将 div 元素添加到外部容器中
         h5Dom?.appendChild(videoContainer);
         if (!this.options.disable) {
-            addInputElement(this, true);
+            this.inputService.initIme(this.initDomId, { disableLocalIME: this.options.disableLocalIME });
         }
-        // 解密-ws地址
-        const signalServer = this.decryptAES(this.options.signalServer, this.options.padCode);
+        // 解密 - ws 地址
+        const signalServer = decryptAES(this.options.signalServer, this.options.padCode);
         const { isWsProxy } = this.options;
         let wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/sdk-ws/${this.options.roomToken}`;
         if (!isWsProxy) {
             wsUrl = `${signalServer}/${this.options.roomToken}`;
         }
-        // stuns地址
-        const stuns = this.decryptAES(this.options.stuns, this.options.padCode);
+        // stuns 地址
+        const stuns = decryptAES(this.options.stuns, this.options.padCode);
         const stunsArr = JSON.parse(stuns);
-        // turns地址
-        const turns = this.decryptAES(this.options.turns, this.options.padCode);
+        // turns 地址
+        const turns = decryptAES(this.options.turns, this.options.padCode);
         const turnsArr = JSON.parse(turns);
         // 信令服务器
         const rtcConfig = {
@@ -2968,34 +867,6 @@ class WebRTC {
      * @param {*} key 秘钥
      * @returns 解密后数据
      */
-    decryptAES(encryptData, key) {
-        try {
-            const ciphertext = CryptoJS.enc.Base64.parse(encryptData); // Base64解密
-            const stringEncryptData = CryptoJS.format.Hex.parse(ciphertext.toString());
-            let keyFormat = key.padEnd(16, "0");
-            // 超过16就截取
-            if (keyFormat.length > 16) {
-                keyFormat = keyFormat.slice(0, 16);
-            }
-            const keyValue = CryptoJS.enc.Utf8.parse(keyFormat); // 密钥
-            const decrypt = CryptoJS.AES.decrypt(stringEncryptData, keyValue, {
-                mode: CryptoJS.mode.ECB,
-                padding: CryptoJS.pad.Pkcs7,
-            });
-            // 将解密后的结果转换为字符串，并解析为JSON对象
-            const source = CryptoJS.enc.Utf8.stringify(decrypt);
-            return source;
-        }
-        catch (error) {
-            return null; // 返回 null 或其他自定义的错误标识
-        }
-    }
-    getMsgTemplate(touchType, content) {
-        return JSON.stringify({
-            touchType,
-            content: JSON.stringify(content),
-        });
-    }
     /** 获取应用信息 */
     getEquipmentInfo(type) {
         if (this.stopOperation)
@@ -3517,7 +1388,7 @@ class WebRTC {
         }
     }
     sendGroupMag(msg) {
-        this.groupRtc?.sendMessage(JSON.stringify({
+        this.groupRtc?.sendMessage?.(JSON.stringify({
             event: "broadcastMsg" /* WebSocketEventType.BROADCAST_MSG */,
             data: msg,
         }));
@@ -3526,7 +1397,7 @@ class WebRTC {
     kickItOutRoom(pads) {
         if (this.stopOperation)
             return;
-        this.groupRtc?.sendMessage(JSON.stringify({
+        this.groupRtc?.sendMessage?.(JSON.stringify({
             event: "broadcastMsg" /* WebSocketEventType.BROADCAST_MSG */,
             data: JSON.stringify({
                 touchType: TouchType.KICK_OUT_USER,
@@ -3543,7 +1414,7 @@ class WebRTC {
     }
     createWebGroupRtc(pads) {
         const arr = pads?.filter((v) => v !== this.remoteUserId);
-        this.groupRtc = new WebGroupRTC(this.options, arr, this.callbacks);
+        this.groupRtc = new WebGroupRtc(this.options, arr, this.callbacks);
     }
     /** 滚轮事件 */
     handleVideoWheel(videoDom) {
@@ -3589,10 +1460,10 @@ class WebRTC {
             // 处理输入框焦点逻辑
             const shouldHandleFocus = (allowLocalIMEInCloud && keyboard === "pad") || keyboard === "local";
             // 处理IOS本机键盘
-            if (this.inputElement &&
+            if (this.inputService.getInputElement() &&
                 shouldHandleFocus &&
                 typeof inputStateIsOpen === "boolean") {
-                inputStateIsOpen ? this.inputElement.focus() : this.inputElement.blur();
+                inputStateIsOpen ? this.inputService.focus() : this.inputService.blur();
             }
             this.touchInfo = generateTouchCoord();
             const videoDomIdRect = videoDom.getBoundingClientRect();
@@ -4284,7 +2155,7 @@ class WebRTC {
     /** 销毁 */
     destroy() {
         this.close();
-        this.inputElement?.remove();
+        // inputService handled in BaseRtc/destroy
         this.videoElement?.destroy();
         this.socketParams?.remoteVideo?.remove();
         this.socketParams?.remoteAudio?.remove();
@@ -4514,7 +2385,7 @@ class WebRTC {
                     }
                 }
                 // 云机、本机键盘使用消息
-                if (msg.key === "inputState" /* MessageKey.INPUT_STATE */ && this.inputElement) {
+                if (msg.key === "inputState" /* MessageKey.INPUT_STATE */ && this.inputService.getInputElement()) {
                     const msgData = JSON.parse(msg.data);
                     this.roomMessage.inputStateIsOpen = msgData.isOpen;
                     const { allowLocalIMEInCloud, keyboard } = this.options;
@@ -4524,15 +2395,15 @@ class WebRTC {
                         keyboard === "local";
                     // 设置回车按钮文案
                     const enterkeyhintText = this.enterkeyhintObj[msgData.imeOptions];
-                    this.inputElement?.setAttribute("enterkeyhint", enterkeyhintText);
+                    this.inputService.getInputElement()?.setAttribute("enterkeyhint", enterkeyhintText);
                     console.log("inputStateIsOpen", inputStateIsOpen);
                     // 若存在inputElement，则判断当前本机键盘是否打开
-                    if (this.inputElement &&
+                    if (this.inputService.getInputElement() &&
                         shouldHandleFocus &&
                         typeof inputStateIsOpen === "boolean") {
                         inputStateIsOpen
-                            ? this.inputElement.focus()
-                            : this.inputElement.blur();
+                            ? this.inputService.focus()
+                            : this.inputService.blur();
                     }
                 }
                 // 将云机内容复制到本机剪切板
@@ -4599,7 +2470,7 @@ class WebRTC {
                 pads: [pads[index]],
                 touchType: TouchType.CLIPBOARD,
             });
-            this.groupRtc?.sendMessage(JSON.stringify({
+            this.groupRtc?.sendMessage?.(JSON.stringify({
                 event: "broadcastMsg" /* WebSocketEventType.BROADCAST_MSG */,
                 data: message,
             }));
@@ -4613,7 +2484,7 @@ class WebRTC {
                 pads: [pads[index]],
                 touchType: TouchType.INPUT_BOX,
             });
-            this.groupRtc?.sendMessage(JSON.stringify({
+            this.groupRtc?.sendMessage?.(JSON.stringify({
                 event: "broadcastMsg" /* WebSocketEventType.BROADCAST_MSG */,
                 data: message,
             }));
@@ -4727,7 +2598,7 @@ class WebRTC {
     /** 截图-保存到本地 */
     saveScreenShotToLocal() {
         if (this.stopOperation)
-            return;
+            return Promise.reject("Operation stopped");
         return new Promise((resolve, reject) => {
             try {
                 const video = document.getElementById(this.remoteVideoId);
@@ -5154,6 +3025,87 @@ class CreateDataChannel {
     }
 }
 
+class MetricsReporter {
+    options;
+    keyParamsMap = new Map();
+    onceOnlyKeys = new Set();
+    reportedKeys = new Set();
+    keyQueueMap = new Map(); // 🚀 每个 key 的顺序队列
+    constructor(options) {
+        this.options = options;
+        if (options.onceOnlyKeys) {
+            this.onceOnlyKeys = new Set(options.onceOnlyKeys);
+        }
+    }
+    /** 设置或更新某个 key 的参数 */
+    addParam(key, params) {
+        // 如果是一次性事件, 并且上报过 就跳过
+        if (this.onceOnlyKeys.has(key) && this.reportedKeys.has(key)) {
+            this.log(`[skip] ${key} addParam is once-only and already reported`);
+            return;
+        }
+        const existing = this.keyParamsMap.get(key) || {};
+        const merged = { ...existing, ...params };
+        this.keyParamsMap.set(key, merged);
+        this.log(`[addParam] ${key}: ${JSON.stringify(merged)}`);
+    }
+    /** 上报某个 key（顺序保证） */
+    instant(key, extraParams) {
+        const isOnceOnly = this.onceOnlyKeys.has(key);
+        // 一次性 key 限制
+        if (isOnceOnly && this.reportedKeys.has(key)) {
+            this.log(`[skip] ${key} instant is once-only and already reported`);
+            return;
+        }
+        isOnceOnly && this.reportedKeys.add(key);
+        const { commonParams } = this.options;
+        // 生成当前 payload
+        const storedParams = this.keyParamsMap.get(key) || {};
+        const payload = {
+            eventKey: key,
+            ...commonParams,
+            ...storedParams,
+            ...extraParams,
+        };
+        // 🚀 关键逻辑：串行队列执行
+        const lastPromise = this.keyQueueMap.get(key) || Promise.resolve();
+        const nextPromise = lastPromise.then(() => this.report(payload, key)).finally(() => {
+            // 如果这是最后一个 Promise，清理它
+            if (this.keyQueueMap.get(key) === nextPromise) {
+                this.keyQueueMap.delete(key);
+                this.log(`[finally] ${key} queue cleared ${this.keyQueueMap.size}`);
+            }
+        });
+        this.keyQueueMap.set(key, nextPromise);
+    }
+    /** 实际上报逻辑 */
+    async report(data, key) {
+        const { endpoint, useBeacon } = this.options;
+        const body = JSON.stringify(data);
+        this.log(`[report] ${key} payload: ${body}`);
+        try {
+            if (useBeacon && navigator.sendBeacon) {
+                navigator.sendBeacon(endpoint, body);
+            }
+            else {
+                await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body,
+                });
+            }
+            this.log(`[done] ${key} report success`);
+        }
+        catch (err) {
+            this.log(`[error] ${key} report failed: ${err}`);
+        }
+    }
+    log(msg) {
+        if (this.options.enableLog)
+            console.log(`[MetricsReporter] ${msg}`);
+    }
+}
+
 /**
  * ARMCLOUD H5 SDK - 分辨率/帧率/码率 映射
  * 参考文档: https://docs.armcloud.net/cn/client/h5/h5-sdk.html#设置分辨率码率帧率
@@ -5216,18 +3168,11 @@ function getKbps(bitrateId) {
     return BITRATE_BY_ID[bitrateId].kbps;
 }
 
-class tcgRtc {
-    initDomId;
-    options;
-    callbacks;
+class TcgRtc extends BaseRtc {
     // 引擎实例
     TCGSDK;
     // 云机实例
     androidInstance;
-    // 视频dom id
-    videoDomId = "";
-    // 远程用户 ID
-    remoteUserId = "";
     metricsReporter = null;
     // 取消请求
     abortController = null;
@@ -5236,28 +3181,13 @@ class tcgRtc {
     // 群控数据通道
     groupDataChannel = null;
     // 注入推流状态
-    isGroupControl = false;
     groupPads = [];
     promiseMap = {
         streamStatus: {},
         injectStatus: {},
     };
-    // 是否注入摄像头
-    isCameraInject = false;
-    // 是否注入麦克风
-    isMicrophoneInject = false;
-    // 是否注入摄像头
-    enableCamera = false;
-    // 是否注入麦克风
-    enableMicrophone = false;
-    // 摄像头设备 ID
-    videoDeviceId = "";
-    // 麦克风设备 ID
-    audioDeviceId = "";
     // 埋点定时器
     metricsTimer = null;
-    // 输入框元素
-    inputElement = null;
     // 旋转方向
     rotateType = undefined;
     // 远端输入框状态
@@ -5295,9 +3225,7 @@ class tcgRtc {
         7: "previous",
     };
     constructor(initDomId, options, callbacks) {
-        this.initDomId = initDomId;
-        this.options = options;
-        this.callbacks = callbacks;
+        super(initDomId, options, callbacks);
         this.TCGSDK = new r();
         this.androidInstance = this.TCGSDK.getAndroidInstance();
         this.enableMicrophone = this.options.enableMicrophone;
@@ -5310,32 +3238,7 @@ class tcgRtc {
         // 禁用粘贴
         this.TCGSDK.setPaste(false);
         // 设置视频dom
-        this.setupVideoDom();
-    }
-    setupVideoDom() {
-        const { masterIdPrefix, padCode } = this.options;
-        // 生成视频容器ID
-        const videoDomId = `${masterIdPrefix}_${padCode}_armcloudVideo`;
-        this.videoDomId = videoDomId;
-        // 创建视频容器元素
-        const videoContainer = document.createElement("div");
-        videoContainer.id = videoDomId;
-        videoContainer.style.position = "relative";
-        // 获取父容器并添加视频容器
-        const parentContainer = document.getElementById(this.initDomId);
-        if (parentContainer) {
-            parentContainer.appendChild(videoContainer);
-        }
-        else {
-            console.warn(`Parent container with id "${this.initDomId}" not found`);
-        }
-    }
-    /** 获取消息模板 */
-    getMsgTemplate(touchType, content) {
-        return JSON.stringify({
-            touchType,
-            content: JSON.stringify(content),
-        });
+        this.createVideoContainer(this.options.padCode, this.options.masterIdPrefix);
     }
     setMicrophone(val) {
         this.enableMicrophone = val;
@@ -5678,9 +3581,7 @@ class tcgRtc {
     /** 初始化输入框 */
     setupInputElement() {
         const { disable, disableLocalIME } = this.options;
-        if (!this.inputElement && !disable && !disableLocalIME) {
-            addInputElement(this, true);
-        }
+        this.inputService.initIme(this.initDomId, { disableLocalIME });
     }
     /** 获取远端输入框状态 */
     getRemoteInputState() {
@@ -5690,20 +3591,20 @@ class tcgRtc {
     }
     /** 同步远端输入状态到本地输入框 */
     syncInputFocusState(data) {
-        if (!this.inputElement)
+        if (!this.inputService.getInputElement())
             return;
         const { allowLocalIMEInCloud, keyboard } = this.options;
         const { isOpen, imeOptions } = data;
         // 更新 enterkeyhint
         const hint = this.enterkeyhintObj[imeOptions];
         if (hint) {
-            this.inputElement.enterKeyHint = hint;
+            this.inputService.getInputElement().enterKeyHint = hint;
         }
         // 是否需要本地焦点控制
         const allowLocalFocus = (allowLocalIMEInCloud && keyboard === "pad") || keyboard === "local";
         if (allowLocalFocus && typeof isOpen === "boolean") {
             setTimeout(() => {
-                isOpen ? this.inputElement?.focus() : this.inputElement?.blur();
+                isOpen ? this.inputService.focus() : this.inputService.blur();
             }, 150);
         }
         // 记录输入框状态
@@ -6467,7 +4368,7 @@ class tcgRtc {
         if (videoDomElement) {
             videoDomElement.innerHTML = "";
         }
-        this.inputElement = null;
+        // inputService handled in BaseRtc/destroy
     }
     /**
      * 发送摇一摇信息
@@ -6727,6 +4628,2095 @@ class tcgRtc {
     }
 }
 
+class CustomGroupRtc {
+    engine = null;
+    params = null;
+    pads = [];
+    callbacks = null;
+    sourceArr = [];
+    constructor(params, pads, callbacks) {
+        this.params = params;
+        this.pads = pads;
+        this.callbacks = callbacks;
+    }
+    // 关闭 WebSocket 连接
+    close() {
+        this.sourceArr?.forEach((v) => {
+            v.cancel();
+        });
+        this.sourceArr = [];
+    }
+    kickItOutRoom(pads) {
+        this.pads = this.pads?.filter((v) => !pads?.includes(v)) || [];
+        this.sendRoomMessage(JSON.stringify({
+            touchType: "kickOutUser",
+            content: JSON.stringify(pads),
+        }));
+    }
+    joinRoom(pads) {
+        this.pads = [...new Set([...(this.pads || []), ...(pads || [])])];
+        const source = axios.CancelToken.source(); // 创建一个取消令牌
+        this.sourceArr.push(source);
+        return new Promise((resolve, reject) => {
+            const { baseUrl } = this.params;
+            const base = baseUrl
+                ? `${baseUrl}/rtc/open/room/sdk/share/applyToken`
+                : `https://openapi.armcloud.net/rtc/open/room/sdk/share/applyToken`;
+            const { userId, uuid, token, manageToken } = this.params;
+            const url = manageToken ? "/manage/rtc/room/share/applyToken" : base;
+            const tok = manageToken || token;
+            axios
+                .post(url, {
+                userId,
+                uuid,
+                terminal: "h5",
+                expire: 360000,
+                pushPublicStream: false,
+                pads: pads?.map((v) => {
+                    return {
+                        padCode: v,
+                        // videoStream: {
+                        //   resolution: 7, // 分辨率
+                        //   frameRate: 5, // 帧率
+                        //   bitrate: 13, // 码率
+                        // },
+                        userId,
+                    };
+                }),
+            }, {
+                headers: manageToken ? { Authorization: tok } : { token: tok },
+                cancelToken: source.token,
+            })
+                .then((res) => {
+                resolve(res);
+            })
+                .catch((error) => {
+                if (axios.isCancel(error)) {
+                    return;
+                }
+                reject(error);
+            });
+        });
+    }
+    async getEngine() {
+        return new Promise((resolve, reject) => {
+            this.joinRoom(this.pads)
+                .then((res) => {
+                const { userId } = this.params;
+                const { appId, roomCode, roomToken } = res?.data?.data || {};
+                this.engine = VERTC.createEngine(appId);
+                this.createEngine({
+                    roomCode,
+                    roomToken,
+                    userId,
+                    resolve,
+                    reject,
+                });
+            })
+                .catch((err) => {
+                const error = new Error("Get Token Error");
+                error.code = "TOKEN_ERR";
+                reject(error);
+            });
+        });
+    }
+    async sendUserMessage(userId, message) {
+        return await this?.engine?.sendUserMessage(userId, message);
+    }
+    async sendRoomMessage(message) {
+        return await this?.engine?.sendRoomMessage(message);
+    }
+    getMsgTemplate(touchType, content) {
+        return JSON.stringify({
+            touchType,
+            content: JSON.stringify(content),
+        });
+    }
+    /** 远端可见用户加入房间 */
+    onUserJoined() {
+        this?.engine?.on(VERTC.events.onUserJoined, (user) => {
+            this.callbacks.onUserLeaveOrJoin?.({
+                type: "join",
+                userInfo: user?.userInfo,
+            });
+        });
+    }
+    /** 监听 onUserMessageReceived 事件 */
+    onUserMessageReceived() {
+        const onUserMessageReceived = (e) => {
+            if (e.message) {
+                const msg = JSON.parse(e.message);
+                if (msg.key === "userjoin") {
+                    this.sendRoomMessage(this.getMsgTemplate("openGroupControl", {
+                        pads: this.pads,
+                    }));
+                    this.sendUserMessage(e.userId, this.getMsgTemplate("openGroupControl", { isOpen: true }));
+                }
+            }
+        };
+        this.engine.on(VERTC.events.onUserMessageReceived, onUserMessageReceived);
+    }
+    /** 远端可见用户加离开房间 */
+    onUserLeave() {
+        this?.engine?.on(VERTC.events.onUserLeave, (user) => {
+            this.callbacks.onUserLeaveOrJoin?.({
+                type: "leave",
+                userInfo: user?.userInfo,
+            });
+        });
+    }
+    async createEngine(options) {
+        const { roomToken, roomCode, userId, resolve, reject } = options;
+        try {
+            const res = await this.engine.joinRoom(roomToken, roomCode, {
+                userId,
+            }, {
+                isAutoPublish: false,
+                isAutoSubscribeAudio: false,
+                isAutoSubscribeVideo: false,
+            });
+            this.onUserJoined();
+            this.onUserLeave();
+            this.onUserMessageReceived();
+            this.sendRoomMessage(this.getMsgTemplate("openGroupControl", {
+                pads: this.pads,
+            }));
+            resolve({
+                engine: this.engine,
+                result: res,
+            });
+        }
+        catch (error) {
+            reject(error);
+        }
+    }
+}
+
+class ScreenshotOverlay {
+    videoContainer;
+    video;
+    rotateType;
+    canvas;
+    context;
+    constructor(videoContainer, rotateType = 0) {
+        this.videoContainer = videoContainer;
+        this.video = this.videoContainer?.querySelector("video");
+        this.rotateType = rotateType;
+        this.canvas = document.createElement("canvas");
+        this.context = this.canvas.getContext("2d", {
+            willReadFrequently: true,
+        });
+        this.initCanvas();
+    }
+    // 初始化 Canvas 并插入到 video 上
+    initCanvas() {
+        if (this.videoContainer && this.canvas) {
+            // 设置 canvas 尺寸与 video 元素的显示尺寸一致
+            this.videoContainer.style.position = "relative";
+            Object.assign(this.canvas.style, {
+                top: 0,
+                left: 0,
+                position: "absolute",
+                display: "none",
+                pointerEvents: "none",
+                zIndex: "10",
+                // border: '5px solid red'
+            });
+            // 将 canvas 插入到 video 的父元素中，覆盖在 video 上
+            this.videoContainer?.appendChild(this.canvas);
+        }
+    }
+    configureCanvas(rotateType, width, height) {
+        // 交换宽高并清空画布
+        if (rotateType === 1) {
+            this.canvas.width = height;
+            this.canvas.height = width;
+            this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            this.context.translate(0, this.canvas.height);
+            this.context.rotate(-Math.PI / 2); // 270度旋转
+        }
+        else {
+            // 恢复到正常状态
+            this.canvas.width = width;
+            this.canvas.height = height;
+            this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            // 如果旋转类型已设置，交换宽高
+            if (this.rotateType) {
+                [this.canvas.width, this.canvas.height] = [height, width];
+            }
+            this.context.setTransform(1, 0, 0, 1, 0, 0); // 恢复坐标系
+        }
+        this.rotateType = rotateType;
+    }
+    /**
+     * 旋转截图
+     * @param rotateType 0:竖屏 1:横屏
+     */
+    setScreenshotrotateType(rotateType = 0) {
+        // 创建一个临时画布
+        const tempCanvas = document.createElement("canvas");
+        const tempContext = tempCanvas.getContext("2d");
+        // 设置临时画布的尺寸为当前画布尺寸
+        tempCanvas.width = this.canvas.width;
+        tempCanvas.height = this.canvas.height;
+        // 将当前画布内容绘制到临时画布
+        tempContext.drawImage(this.canvas, 0, 0);
+        // 配置画布的旋转和尺寸
+        this.configureCanvas(rotateType, tempCanvas.width, tempCanvas.height);
+        // 将临时画布的内容绘制到旋转后的画布
+        this.context.drawImage(tempCanvas, 0, 0);
+        // 释放临时画布
+        tempCanvas.width = 0;
+        tempCanvas.height = 0;
+    }
+    /**
+     * 截图并绘制在 canvas 上
+     * @param rotateType 0:竖屏 1:横屏
+     */
+    takeScreenshot(rotateType = 0) {
+        this.rotateType = rotateType;
+        this.video = this.videoContainer?.querySelector("video");
+        if (this.context && this.video) {
+            const { offsetTop, offsetLeft, offsetWidth, offsetHeight } = this.video;
+            Object.assign(this.canvas, {
+                top: `${offsetTop}px`,
+                left: `${offsetLeft}px`,
+                width: offsetWidth,
+                height: offsetHeight,
+            });
+            // 清空 canvas
+            this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            // 保存当前状态
+            this.context.save();
+            // 配置画布的旋转和尺寸
+            this.configureCanvas(rotateType, offsetWidth, offsetHeight);
+            // 使用 video 的显示尺寸绘制截图
+            this.context.drawImage(this.video, 0, 0, offsetWidth, offsetHeight);
+            // 恢复画布状态
+            this.context.restore();
+        }
+        else {
+            console.log("视频未准备好或加载失败");
+        }
+    }
+    resizeScreenshot(width, height) {
+        if (this.canvas && this.context) {
+            // 保存旧的截图
+            const imageData = this.context.getImageData(0, 0, this.canvas.width, this.canvas.height);
+            // 创建一个临时 canvas
+            const tempCanvas = document.createElement("canvas");
+            const tempContext = tempCanvas.getContext("2d");
+            // 计算保持宽高比
+            const aspectRatio = imageData.width / imageData.height;
+            let newWidth, newHeight;
+            if (width / height > aspectRatio) {
+                newWidth = height * aspectRatio;
+                newHeight = height;
+            }
+            else {
+                newWidth = width;
+                newHeight = width / aspectRatio;
+            }
+            // 设置临时 canvas 尺寸
+            tempCanvas.width = newWidth;
+            tempCanvas.height = newHeight;
+            // 将旧截图绘制到临时 canvas
+            tempContext?.drawImage(this.canvas, 0, 0, imageData.width, imageData.height, 0, 0, newWidth, newHeight);
+            // 清空当前 canvas 并调整尺寸
+            this.canvas.width = width;
+            this.canvas.height = height;
+            this.context.clearRect(0, 0, width, height);
+            // 将调整后的图像绘制到当前 canvas 中
+            this.context.drawImage(tempCanvas, 0, 0, newWidth, newHeight, 0, 0, width, height);
+        }
+        else {
+            console.log("Canvas or context is not initialized.");
+        }
+    }
+    // 清除 canvas 覆盖
+    clearScreenShot() {
+        if (this.context) {
+            this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        }
+    }
+    showScreenShot() {
+        if (this.canvas) {
+            this.canvas.style.display = "block";
+        }
+    }
+    hideScreenShot() {
+        if (this.canvas) {
+            this.canvas.style.display = "none";
+        }
+    }
+    // 销毁类的实例
+    destroy() {
+        // 清除 canvas
+        this.clearScreenShot();
+        // 从 videoContainer 中移除 canvas
+        if (this.canvas.parentNode) {
+            this.canvas.parentNode.removeChild(this.canvas);
+        }
+        this.videoContainer.style.position = "";
+        // 释放引用
+        this.videoContainer = null;
+        this.video = null;
+        this.canvas = null;
+        this.context = null;
+    }
+}
+
+class CustomRtc extends BaseRtc {
+    screenShotInstance = null;
+    isFirstRotate = false;
+    metricsReporter = null;
+    remoteResolution = {
+        width: 0,
+        height: 0,
+    };
+    // 触摸信息
+    touchConfig = {
+        action: 0, // 0 按下 1 抬起 2 触摸中
+        widthPixels: document.body.clientWidth,
+        heightPixels: document.body.clientHeight,
+        pointCount: 1, // 手指操作数量
+        touchType: "gesture",
+        properties: [], // 手指id， toolType: 1写死
+        coords: [], // 操作坐标 pressure: 1.0, size: 1.0,写死
+    };
+    // 键盘快捷键监听函数
+    _listenKeyboardShortcut = () => { };
+    // 云手机容器是否处于活跃交互状态
+    isContainerActive = false;
+    // 触摸坐标信息
+    touchInfo = generateTouchCoord();
+    // 模拟触摸
+    simulateTouchInfo = generateTouchCoord();
+    // 群控同步
+    groupControlSync = true;
+    engine = null;
+    groupEngine = null;
+    // 当前推流状态promise 缓存
+    promiseMap = {
+        streamStatus: {
+            resolve: () => { },
+            reject: () => { },
+        },
+        injectStatus: {
+            resolve: null,
+            reject: null,
+        },
+    };
+    roomMessage = {};
+    // 回收时间定时器
+    autoRecoveryTimer = null;
+    isFirstFrame = false;
+    firstFrameCount = 0;
+    rotation = 0;
+    // 埋点定时器
+    metricsTimer = null;
+    /**
+     * 安卓对应回车值
+     * go：前往 2
+     * search：搜索 3
+     * send：发送 4
+     * next：下一个 5
+     * done：完成 6
+     * previous：上一个 7
+     */
+    enterkeyhintObj = {
+        2: "go",
+        3: "search",
+        4: "send",
+        5: "next",
+        6: "done",
+        7: "previous",
+    };
+    rotateType = 0;
+    // 摄像头分辨率信息
+    cameraResolution = {
+        width: 0,
+        height: 0,
+    };
+    constructor(viewId, params, callbacks) {
+        super(viewId, params, callbacks);
+        const { masterIdPrefix, padCode } = params;
+        this.remoteUserId = params.padCode;
+        this.enableMicrophone = params.enableMicrophone;
+        this.enableCamera = params.enableCamera;
+        this.videoDeviceId = params.videoDeviceId;
+        this.audioDeviceId = params.audioDeviceId;
+        // 获取外部容器div元素
+        document.getElementById(this.initDomId);
+        // 创建并添加 video 容器
+        this.createVideoContainer(padCode, masterIdPrefix);
+        // 创建引擎对象
+        this.createEngine();
+    }
+    /** 浏览器是否支持 */
+    // eslint-disable-next-line class-methods-use-this
+    isSupported() {
+        return VERTC.isSupported();
+    }
+    setMicrophone(val) {
+        this.enableMicrophone = val;
+    }
+    setCamera(val) {
+        this.enableCamera = val;
+    }
+    /** 设置摄像头设备 */
+    async setVideoDeviceId(val) {
+        this.videoDeviceId = val;
+        if (this.isCameraInject) {
+            return this.cameraInject();
+        }
+    }
+    /** 设置麦克风设备 */
+    async setAudioDeviceId(val) {
+        this.audioDeviceId = val;
+        if (this.isMicrophoneInject) {
+            return this.microphoneInject();
+        }
+        return;
+    }
+    /** 打开或关闭监控操作 */
+    setMonitorOperation(isMonitor, forwardOff = true) {
+        this.sendUserMessage(this.options.clientId, this.getMsgTemplate(TouchType.EVENT_SDK, {
+            type: "operateSwitch" /* MessageKey.OPERATE_SWITCH */,
+            isOpen: isMonitor,
+        }), forwardOff);
+    }
+    /** 触发无操作回收回调函数 */
+    triggerRecoveryTimeCallback() {
+        if (this.options.disable ||
+            !this.options.autoRecoveryTime ||
+            this.isCameraInject ||
+            this.isMicrophoneInject) {
+            return;
+        }
+        if (this.autoRecoveryTimer) {
+            // console.log("清除计时器");
+            clearTimeout(this.autoRecoveryTimer);
+        }
+        this.autoRecoveryTimer = setTimeout(() => {
+            console.log("触发无操作回收了");
+            this.stop();
+            this.callbacks.onAutoRecoveryTime?.();
+        }, this.options.autoRecoveryTime * 1000);
+    }
+    setVideoEncoder(width, height) {
+        if (!width || !height) {
+            return;
+        }
+        this.cameraResolution = {
+            width,
+            height,
+        };
+        const frameRate = 15;
+        const maxKbps = 4000;
+        console.log("设置编码器参数", width, height, frameRate, maxKbps);
+        this.engine?.setVideoEncoderConfig({
+            width,
+            height,
+            frameRate,
+            maxKbps,
+        });
+    }
+    /** 调用 createEngine 创建一个本地 Engine 引擎对象 */
+    async createEngine() {
+        if (this.options.disable)
+            return;
+        this.inputService.initIme(this.initDomId, { disableLocalIME: this.options.disableLocalIME });
+        this.engine = VERTC.createEngine(this.options.appId);
+        VERTC.setParameter("ICE_CONFIG_REQUEST_URLS", [
+            "rtcg-access.volcvideos.com",
+            "rtcg-access-va.volcvideos.com",
+            "rtcg-access-fr.volcvideos.com",
+            "rtcg-access-sg.volcvideos.com",
+            "rtc-access-ag.bytedance.com",
+            "rtc-access.bytedance.com",
+            "rtc-access2-hl.bytedance.com",
+            "rtcg-access.bytevcloud.com",
+        ]);
+        this.engine?.on(VERTC.events.onLocalVideoSizeChanged, (resolution) => {
+            const { width, height } = resolution?.info || {};
+            this.setVideoEncoder(width, height);
+        });
+        /** 监听失败回调 */
+        this.engine.on(VERTC.events.onError, (error) => {
+            this.callbacks.onErrorMessage?.(error);
+        });
+        /** 监听播放失败回调 */
+        this.engine.on(VERTC.events.onAutoplayFailed, (e) => {
+            this.callbacks.onAutoplayFailed?.(e);
+        });
+        /** 用户订阅的远端音/视频流统计信息以及网络状况，统计周期为 2s */
+        this.engine.on(VERTC.events.onRemoteStreamStats, (e) => {
+            this.callbacks.onRunInformation?.(e);
+        });
+        /** 加入房间后，会以每2秒一次的频率，收到本端上行及下行的网络质量信息。 */
+        this.engine.on(VERTC.events.onNetworkQuality, (uplinkNetworkQuality, downlinkNetworkQuality) => {
+            this.callbacks.onNetworkQuality?.(uplinkNetworkQuality, downlinkNetworkQuality);
+        });
+    }
+    // 创建群控实例
+    async createGroupEngine(pads = [], config) {
+        this.groupRtc = new CustomGroupRtc({ ...this.options, ...config }, pads, this.callbacks);
+        try {
+            const example = await this.groupRtc?.getEngine?.();
+            if (example) {
+                this.groupEngine = example.engine;
+            }
+        }
+        catch (error) {
+            this.callbacks.onGroupControlError?.({
+                code: error.code,
+                msg: error.message,
+            });
+        }
+    }
+    /** 手动销毁通过 createEngine 所创建的引擎对象 */
+    destroyEngine() {
+        if (this.engine)
+            VERTC.destroyEngine(this.engine);
+        if (this.groupEngine)
+            VERTC.destroyEngine(this.groupEngine);
+    }
+    /**
+     * 静音
+     */
+    muted() {
+        this.engine?.unsubscribeStream(this.options.clientId, MediaType.AUDIO);
+    }
+    /**
+     * 取消静音
+     */
+    unmuted() {
+        this.engine?.subscribeStream(this.options.clientId, MediaType.AUDIO);
+    }
+    /** 按顺序发送文本框 */
+    sendGroupInputString(pads, strs) {
+        strs?.map((v, index) => {
+            const message = JSON.stringify({
+                text: v,
+                pads: [pads[index]],
+                touchType: TouchType.INPUT_BOX,
+            });
+            this.groupRtc?.sendRoomMessage?.(message);
+        });
+    }
+    /**  群控剪切板  */
+    sendGroupInputClipper(pads, strs) {
+        strs?.map((v, index) => {
+            const message = JSON.stringify({
+                text: v,
+                pads: [pads[index]],
+                touchType: TouchType.CLIPBOARD,
+            });
+            this.groupRtc?.sendRoomMessage?.(message);
+        });
+    }
+    /** 手动开启音视频流播放 */
+    startPlay() {
+        if (this.engine)
+            this.engine.play(this.options.clientId);
+    }
+    /** 群控房间信息 */
+    async sendGroupRoomMessage(message) {
+        return await this?.groupRtc?.sendRoomMessage?.(message);
+    }
+    /** 获取应用信息 */
+    getEquipmentInfo(type) {
+        this.sendUserMessage(this.options.clientId, this.getMsgTemplate(TouchType.EQUIPMENT_INFO, {
+            type,
+        }), true);
+    }
+    /** 获取注入推流状态 */
+    getInjectStreamStatus(type, timeout = 0) {
+        return new Promise((resolve) => {
+            // 创建超时处理器
+            let timeoutHandler = null;
+            if (timeout !== 0) {
+                timeoutHandler = setTimeout(() => {
+                    resolve({
+                        status: "unknown",
+                        type,
+                    });
+                }, timeout);
+            }
+            // 根据类型处理不同的流状态
+            const handleStreamStatus = () => {
+                switch (type) {
+                    case "video":
+                        try {
+                            // 保存resolve函数以便在收到响应时调用
+                            Object.assign(this.promiseMap.streamStatus, {
+                                resolve: (result) => {
+                                    if (timeoutHandler)
+                                        clearTimeout(timeoutHandler);
+                                    resolve(result);
+                                },
+                            });
+                            this.sendUserMessage(this.options.clientId, this.getMsgTemplate(TouchType.EVENT_SDK, {
+                                type: "injectionVideoStats",
+                            }), true);
+                        }
+                        catch (error) {
+                            if (timeoutHandler)
+                                clearTimeout(timeoutHandler);
+                            resolve({
+                                status: "unknown",
+                                type,
+                            });
+                        }
+                        break;
+                    case "camera":
+                        if (timeoutHandler)
+                            clearTimeout(timeoutHandler);
+                        resolve({
+                            status: this.isCameraInject ? "live" : "offline",
+                            type,
+                        });
+                        break;
+                    case "audio":
+                        if (timeoutHandler)
+                            clearTimeout(timeoutHandler);
+                        resolve({
+                            status: this.isMicrophoneInject ? "live" : "offline",
+                            type,
+                        });
+                        break;
+                }
+            };
+            handleStreamStatus();
+        });
+    }
+    /** 应用卸载 */
+    appUnInstall(pkgNames) {
+        this.sendUserMessage(this.options.clientId, this.getMsgTemplate(TouchType.APP_UNINSTALL, pkgNames), true);
+    }
+    /** 通知手机需要注入 */
+    async notifyInject(type, isOpen) {
+        await this.sendUserMessage(this.options.clientId, this.getMsgTemplate(TouchType.EVENT_SDK, {
+            type,
+            isOpen,
+        }), true);
+    }
+    /** 开启摄像头 或 麦克风注入 返回一个promise */
+    async startMediaStream(mediaType, msgData) {
+        try {
+            const res = {
+                audio: null,
+                video: null,
+            };
+            // 处理视频设备
+            if ([MediaType.VIDEO, MediaType.AUDIO_AND_VIDEO].includes(mediaType)) {
+                await this.notifyInject("injectionCamera" /* SdkEventType.INJECTION_CAMERA */, true);
+                const videoDeviceId = this.videoDeviceId || (msgData?.isFront ? "user" : "environment");
+                await this.engine?.setVideoCaptureDevice(videoDeviceId);
+                res.video = await this.engine?.startVideoCapture();
+                //  this.setVideoEncoder(res?.video?.width, res?.video?.height);
+                await this.engine?.publishStream(MediaType.VIDEO);
+                this.isCameraInject = true;
+            }
+            // 处理音频设备
+            if ([MediaType.AUDIO, MediaType.AUDIO_AND_VIDEO].includes(mediaType)) {
+                await this.notifyInject("injectionAudio" /* SdkEventType.INJECTION_AUDIO */, true);
+                if (this.audioDeviceId) {
+                    await this.engine?.setAudioCaptureDevice(this.audioDeviceId);
+                }
+                res.audio = await this.engine?.startAudioCapture();
+                await this.engine?.publishStream(MediaType.AUDIO);
+                this.isMicrophoneInject = true;
+            }
+            return res;
+        }
+        catch (error) {
+            return Promise.reject(error);
+        }
+    }
+    /** 关闭摄像头 或 麦克风注入 返回一个promise */
+    async stopMediaStream(mediaType) {
+        try {
+            const stopOperations = [];
+            // 根据媒体类型添加对应操作
+            if (mediaType === MediaType.VIDEO ||
+                mediaType === MediaType.AUDIO_AND_VIDEO) {
+                await this.notifyInject("injectionCamera" /* SdkEventType.INJECTION_CAMERA */, false);
+                stopOperations.push(this.engine?.stopVideoCapture(), this.engine?.unpublishStream(MediaType.VIDEO));
+            }
+            if (mediaType === MediaType.AUDIO ||
+                mediaType === MediaType.AUDIO_AND_VIDEO) {
+                await this.notifyInject("injectionAudio" /* SdkEventType.INJECTION_AUDIO */, false);
+                stopOperations.push(this.engine?.stopAudioCapture(), this.engine?.unpublishStream(MediaType.AUDIO));
+            }
+            // 并行执行所有停止操作
+            await Promise.all(stopOperations);
+            switch (mediaType) {
+                case MediaType.VIDEO:
+                    this.isCameraInject = false;
+                    break;
+                case MediaType.AUDIO:
+                    this.isMicrophoneInject = false;
+                    break;
+                case MediaType.AUDIO_AND_VIDEO:
+                    this.isCameraInject = false;
+                    this.isMicrophoneInject = false;
+                    break;
+            }
+        }
+        catch (error) {
+            return Promise.reject(error);
+        }
+    }
+    /** 摄像头注入 */
+    async cameraInject(msgData) {
+        try {
+            await this.stopMediaStream(MediaType.VIDEO);
+            const res = await this.startMediaStream(MediaType.VIDEO, msgData);
+            this.callbacks.onVideoInit?.(res.video);
+        }
+        catch (error) {
+            this.callbacks.onVideoError?.(error);
+            return Promise.reject(error);
+        }
+    }
+    /** 麦克风注入 */
+    async microphoneInject() {
+        try {
+            await this.stopMediaStream(MediaType.AUDIO);
+            const res = await this.startMediaStream(MediaType.AUDIO);
+            this.callbacks.onAudioInit?.(res.audio);
+            this.isMicrophoneInject = true;
+            return res.audio;
+        }
+        catch (error) {
+            this.callbacks.onAudioError?.(error);
+            this.isMicrophoneInject = false;
+            return Promise.reject(error);
+        }
+    }
+    /** 发送消息 */
+    async sendUserMessage(userId, message, notSendInGroups) {
+        try {
+            // 重置无操作回收定时器
+            this.triggerRecoveryTimeCallback();
+            !notSendInGroups &&
+                this.groupControlSync &&
+                this.sendGroupRoomMessage(message);
+            return await this.engine?.sendUserMessage(userId, message);
+        }
+        catch (error) {
+            this.callbacks.onSendUserError?.(error);
+            return Promise.reject(error);
+        }
+    }
+    /** 群控退出房间 */
+    kickItOutRoom(pads) {
+        if (Array.isArray(pads)) {
+            this.groupRtc?.kickItOutRoom(pads);
+        }
+    }
+    /** 群控加入房间 */
+    joinGroupRoom(pads) {
+        const arr = pads?.filter((v) => v !== this.remoteUserId);
+        if (!arr.length || !this.isGroupControl)
+            return;
+        if (!this.groupRtc && this.isGroupControl) {
+            this.createGroupEngine(arr);
+            return;
+        }
+        this.groupRtc?.joinRoom(arr);
+    }
+    /** 进入 RTC 房间 */
+    start(isGroupControl = false, pads = []) {
+        this.isGroupControl = isGroupControl;
+        this.metricsReporter = new MetricsReporter({
+            endpoint: `${this.options.baseUrl}/traffic-info/open/traffic/rtcMonitor`,
+            commonParams: {
+                padCode: this.remoteUserId,
+                streamType: this.options.streamType,
+                sdkTerminal: "h5",
+            },
+            onceOnlyKeys: ["FirstFrame" /* ReportEventType.FIRST_FRAME */],
+            useBeacon: false,
+            enableLog: true,
+        });
+        this.metricsReporter?.addParam("FirstFrame" /* ReportEventType.FIRST_FRAME */, {
+            joinRoomTime: Date.now(),
+        });
+        this.metricsTimer = setTimeout(() => {
+            this.metricsReporter?.addParam("FirstFrame" /* ReportEventType.FIRST_FRAME */, {
+                judgeTime: Date.now(),
+                result: 0,
+            });
+            this.metricsReporter?.instant("FirstFrame" /* ReportEventType.FIRST_FRAME */);
+        }, 5000);
+        const config = {
+            appId: this.options.appId,
+            roomId: this.options.roomCode,
+            uid: this.options.userId,
+            token: this.options.roomToken,
+        };
+        this.options.mediaType === 1 || this.options.mediaType === 3;
+        this.options.mediaType === 2 || this.options.mediaType === 3;
+        this.engine
+            ?.joinRoom(config.token, config.roomId, {
+            userId: config.uid,
+        }, {
+            isAutoPublish: false, // 是否自动发布音视频流，默认为自动发布。
+            isAutoSubscribeAudio: false, // 是否自动订阅音频流，默认为自动订阅。
+            isAutoSubscribeVideo: false, // 是否自动订阅视频流，默认为自动订阅。
+        })
+            .then(async (res) => {
+            const arr = pads?.filter((v) => v !== this.remoteUserId);
+            isGroupControl && arr.length && this.createGroupEngine(arr);
+            // 加入房间成功
+            const that = this;
+            const { disableContextMenu, clientId: userId } = this.options;
+            const videoDom = document.getElementById(that.videoDomId);
+            if (videoDom) {
+                videoDom.style.width = "0px";
+                videoDom.style.height = "0px";
+                const isMobileFlag = isTouchDevice() || isMobile();
+                let eventTypeStart = "touchstart";
+                let eventTypeMove = "touchmove";
+                let eventTypeEnd = "touchend";
+                if (!isMobileFlag) {
+                    eventTypeStart = "mousedown";
+                    eventTypeMove = "mousemove";
+                    eventTypeEnd = "mouseup";
+                }
+                if (disableContextMenu) {
+                    videoDom.addEventListener("contextmenu", (e) => {
+                        e.preventDefault();
+                    });
+                }
+                // 监听鼠标滚轮事件
+                videoDom.addEventListener("wheel", (e) => {
+                    // e.preventDefault()
+                    if (this.options.disable)
+                        return;
+                    const { offsetX, offsetY, deltaY } = e;
+                    const touchConfigMousedown = {
+                        coords: [{ pressure: 1.0, size: 1.0, x: offsetX, y: offsetY }],
+                        widthPixels: videoDom.clientWidth,
+                        heightPixels: videoDom.clientHeight,
+                        pointCount: 1,
+                        properties: [{ id: 0, toolType: 1 }],
+                        touchType: "gestureSwipe",
+                        swipe: deltaY > 0 ? -1 : 1,
+                    };
+                    const messageMousedown = JSON.stringify(touchConfigMousedown);
+                    this.sendUserMessage(userId, messageMousedown);
+                });
+                /** 鼠标移出 */
+                videoDom.addEventListener("mouseleave", (e) => {
+                    e.preventDefault();
+                    if (this.options.disable)
+                        return;
+                    // 若未按下时，不发送鼠标移动事件
+                    if (!this.hasPushDown) {
+                        return;
+                    }
+                    this.touchConfig.action = 1; // 抬起
+                    const message = JSON.stringify(this.touchConfig);
+                    this.sendUserMessage(userId, message);
+                });
+                // 添加触摸事件监听器到新节点
+                // 触摸开始
+                videoDom.addEventListener(eventTypeStart, (e) => {
+                    e.preventDefault();
+                    if (this.options.disable)
+                        return;
+                    that.hasPushDown = true;
+                    const { allowLocalIMEInCloud, keyboard } = that.options;
+                    const { inputStateIsOpen } = that.roomMessage;
+                    // 处理输入框焦点逻辑
+                    const shouldHandleFocus = (allowLocalIMEInCloud && keyboard === "pad") ||
+                        keyboard === "local";
+                    if (that.inputService.getInputElement() &&
+                        shouldHandleFocus &&
+                        typeof inputStateIsOpen === "boolean") {
+                        inputStateIsOpen
+                            ? that.inputService.focus()
+                            : that.inputService.blur();
+                    }
+                    this.touchInfo = generateTouchCoord();
+                    // 获取节点相对于视口的位置信息
+                    const videoDomIdRect = videoDom.getBoundingClientRect();
+                    const distanceToTop = videoDomIdRect.top;
+                    const distanceToLeft = videoDomIdRect.left;
+                    // 初始化
+                    that.touchConfig.properties = [];
+                    that.touchConfig.coords = [];
+                    // 计算触摸手指数量
+                    const touchCount = isMobileFlag ? e?.touches?.length : 1;
+                    that.touchConfig.action = 0; // 按下操作
+                    that.touchConfig.pointCount = touchCount;
+                    // 手指触控节点宽高
+                    const bigSide = videoDom.clientWidth > videoDom.clientHeight
+                        ? videoDom.clientWidth
+                        : videoDom.clientHeight;
+                    const smallSide = videoDom.clientWidth > videoDom.clientHeight
+                        ? videoDom.clientHeight
+                        : videoDom.clientWidth;
+                    this.touchConfig.widthPixels =
+                        this.rotateType == 1 ? bigSide : smallSide;
+                    this.touchConfig.heightPixels =
+                        this.rotateType == 1 ? smallSide : bigSide;
+                    if (this.rotateType == 1 &&
+                        this.remoteResolution.height > this.remoteResolution.width) {
+                        this.touchConfig.widthPixels = smallSide;
+                        this.touchConfig.heightPixels = bigSide;
+                    }
+                    else if (this.rotateType == 0 &&
+                        this.remoteResolution.width > this.remoteResolution.height) {
+                        // 竖屏但是远端流是横屏（用户手动旋转屏幕）
+                        this.touchConfig.widthPixels = bigSide;
+                        this.touchConfig.heightPixels = smallSide;
+                    }
+                    for (let i = 0; i < touchCount; i += 1) {
+                        const touch = isMobileFlag ? e.touches[i] : e;
+                        that.touchConfig.properties[i] = {
+                            id: i,
+                            toolType: 1,
+                        };
+                        let x = touch.offsetX;
+                        let y = touch.offsetY;
+                        if (x == undefined) {
+                            x = touch.clientX - distanceToLeft;
+                            y = touch.clientY - distanceToTop;
+                            if (this.rotateType == 1 &&
+                                this.remoteResolution.height > this.remoteResolution.width) {
+                                x = videoDomIdRect.bottom - touch.clientY;
+                                y = touch.clientX - distanceToLeft;
+                            }
+                            else if (this.rotateType == 0 &&
+                                this.remoteResolution.width > this.remoteResolution.height) {
+                                x = touch.clientY - distanceToTop;
+                                y = videoDomIdRect.right - touch.clientX;
+                            }
+                        }
+                        that.touchConfig.coords.push({
+                            ...this.touchInfo,
+                            orientation: 0.01 * Math.random(),
+                            x: x,
+                            y: y,
+                        });
+                    }
+                    const touchConfig = {
+                        action: touchCount > 1 ? 261 : 0,
+                        widthPixels: that.touchConfig.widthPixels,
+                        heightPixels: that.touchConfig.heightPixels,
+                        pointCount: touchCount,
+                        touchType: "gesture",
+                        properties: that.touchConfig.properties,
+                        coords: that.touchConfig.coords,
+                    };
+                    const message = JSON.stringify(touchConfig);
+                    that.sendUserMessage(userId, message);
+                });
+                // 触摸中
+                videoDom.addEventListener(eventTypeMove, (e) => {
+                    e.preventDefault();
+                    if (this.options.disable)
+                        return;
+                    // 若未按下时，不发送鼠标移动事件
+                    if (!that.hasPushDown) {
+                        return;
+                    }
+                    // 获取节点相对于视口的位置信息
+                    const videoDomIdRect = videoDom.getBoundingClientRect();
+                    const distanceToTop = videoDomIdRect.top;
+                    const distanceToLeft = videoDomIdRect.left;
+                    // 计算触摸手指数量
+                    const touchCount = isMobileFlag ? e?.touches?.length : 1;
+                    that.touchConfig.action = 2; // 触摸中
+                    that.touchConfig.pointCount = touchCount;
+                    that.touchConfig.coords = [];
+                    const coords = [];
+                    for (let i = 0; i < touchCount; i += 1) {
+                        const touch = isMobileFlag ? e.touches[i] : e;
+                        that.touchConfig.properties[i] = {
+                            id: i,
+                            toolType: 1,
+                        };
+                        let x = touch.offsetX;
+                        let y = touch.offsetY;
+                        if (x == undefined) {
+                            x = touch.clientX - distanceToLeft;
+                            y = touch.clientY - distanceToTop;
+                            if (this.rotateType == 1 &&
+                                this.remoteResolution.height > this.remoteResolution.width) {
+                                x = videoDomIdRect.bottom - touch.clientY;
+                                y = touch.clientX - distanceToLeft;
+                            }
+                            else if (this.rotateType == 0 &&
+                                this.remoteResolution.width > this.remoteResolution.height) {
+                                x = touch.clientY - distanceToTop;
+                                y = videoDomIdRect.right - touch.clientX;
+                            }
+                        }
+                        coords.push({
+                            ...this.touchInfo,
+                            orientation: 0.01 * Math.random(),
+                            x: x,
+                            y: y,
+                        });
+                    }
+                    that.touchConfig.coords = coords;
+                    const touchConfig = {
+                        action: 2,
+                        widthPixels: that.touchConfig.widthPixels,
+                        heightPixels: that.touchConfig.heightPixels,
+                        pointCount: touchCount,
+                        touchType: "gesture",
+                        properties: that.touchConfig.properties,
+                        coords: that.touchConfig.coords,
+                    };
+                    const message = JSON.stringify(touchConfig);
+                    // console.log('2222触摸中', message)
+                    that.sendUserMessage(userId, message);
+                });
+                // 触摸结束
+                videoDom.addEventListener(eventTypeEnd, (e) => {
+                    e.preventDefault();
+                    if (this.options.disable)
+                        return;
+                    that.hasPushDown = false; // 按下状态重置
+                    if (isMobileFlag) {
+                        if (e.touches.length === 0) {
+                            that.touchConfig.action = 1; // 抬起
+                            const message = JSON.stringify(that.touchConfig);
+                            that.sendUserMessage(userId, message);
+                        }
+                    }
+                    else {
+                        that.touchConfig.action = 1; // 抬起
+                        const message = JSON.stringify(that.touchConfig);
+                        // console.log("触摸结束", message);
+                        that.sendUserMessage(userId, message);
+                    }
+                });
+                // 监听广播消息
+                that.onRoomMessageReceived();
+                that.onUserMessageReceived();
+                that.onUserJoined();
+                that.onUserLeave();
+                that.onRemoteVideoFirstFrame();
+                // 远端摄像头/麦克风采集音视频流的回调
+                that.onUserPublishStream();
+                this.startCV();
+                this.callbacks.onConnectSuccess?.();
+            }
+            /**
+             * 监听连接状态的变化
+             * @return
+             * 0 进行连接前准备，锁定相关资源,
+             * 1 连接断开,
+             * 2 首次连接，正在连接中,
+             * 3 首次连接成功,
+             * 4 连接断开后重新连接中,
+             * 5 连接断开后重连成功,
+             * 6 处于 CONNECTION_STATE_DISCONNECTED 状态超过 10 秒，且期间重连未成功。SDK将继续尝试重连
+             */
+            that.engine?.on(VERTC.events.onConnectionStateChanged, (e) => {
+                that.callbacks.onConnectionStateChanged?.(e);
+            });
+            // that.engine?.on(
+            //   VERTC.events.onAudioDeviceStateChanged,
+            //   debounce((e) => {
+            //     console.log("音频设备状态变化", e);
+            //     if (e.deviceState == "active" && this.enableMicrophone) {
+            //       this.microphoneInject();
+            //     }
+            //     that.callbacks?.onAudioDeviceStateChanged?.(e);
+            //   }, 500)
+            // );
+        })
+            .catch((error) => {
+            this.metricsReporter?.addParam("FirstFrame" /* ReportEventType.FIRST_FRAME */, {
+                judgeTime: Date.now(),
+                result: 0,
+            });
+            this.metricsReporter?.instant("FirstFrame" /* ReportEventType.FIRST_FRAME */);
+            console.log("进房错误", error);
+            this.callbacks.onConnectFail?.({ code: error.code, msg: error.message });
+        });
+    }
+    startCV() {
+        console.log("startCV", this.videoDomId);
+        this._listenKeyboardShortcut = this.listenKeyboardShortcut.bind(this);
+        this.disableKeyboardShortcut();
+        this.enableKeyboardShortcut();
+        this.bindContainerActiveState();
+    }
+    bindContainerActiveState() {
+        const container = document.getElementById(this.initDomId);
+        if (!container)
+            return;
+        container.addEventListener("mousedown", () => { this.isContainerActive = true; });
+        container.addEventListener("touchstart", () => { this.isContainerActive = true; });
+        document.addEventListener("mousedown", (e) => {
+            if (!container.contains(e.target))
+                this.isContainerActive = false;
+        });
+        document.addEventListener("touchstart", (e) => {
+            if (!container.contains(e.target))
+                this.isContainerActive = false;
+        });
+    }
+    enableKeyboardShortcut() {
+        document.addEventListener("keydown", this._listenKeyboardShortcut);
+    }
+    disableKeyboardShortcut() {
+        console.log("disableKeyboardShortcut");
+        document.removeEventListener("keydown", this._listenKeyboardShortcut);
+    }
+    /**
+   * 监听键盘快捷键
+   */
+    listenKeyboardShortcut(e) {
+        if (e.isComposing)
+            return; // 忽略输入法组合键
+        // 只在云手机视频容器处于活跃交互状态时才拦截快捷键，避免影响页面其他区域的复制/全选操作
+        if (!this.isContainerActive)
+            return;
+        const key = e.key.toLowerCase(); // 统一小写
+        const ctrlOrCmd = e.ctrlKey || e.metaKey; // Win/Linux = Ctrl, macOS = Cmd
+        if (ctrlOrCmd && key === "a") {
+            e.preventDefault();
+            this?.triggerKeyboardShortcut(8192, 29);
+        }
+        else if (ctrlOrCmd && key === "c") {
+            e.preventDefault();
+            this?.triggerKeyboardShortcut(8192, 31);
+        }
+    }
+    /** 远端用户离开房间 */
+    onUserLeave() {
+        this.engine?.on(VERTC.events.onConnectionStateChanged, (e) => {
+            console.log("onConnectionStateChanged ", e);
+            // this.disableKeyboardShortcut()
+        });
+        this.engine?.on(VERTC.events.onUserLeave, (res) => {
+            console.log("onUserLeave ", res);
+            this.disableKeyboardShortcut();
+            this.callbacks.onUserLeave?.(res);
+        });
+    }
+    setViewSize(width, height, rotateType = 0) {
+        const h5Dom = document.getElementById(this.initDomId);
+        const videoDom = document.getElementById(this.videoDomId);
+        if (h5Dom && videoDom) {
+            const setDimensions = (element, width, height) => {
+                element.style.width = width + "px";
+                element.style.height = height + "px";
+            };
+            // 设置宽高
+            setDimensions(h5Dom, width, height);
+            if (rotateType == 1) {
+                setDimensions(videoDom, height, width);
+                return;
+            }
+            setDimensions(videoDom, width, height);
+        }
+    }
+    async getCameraState(isRetry = false) {
+        try {
+            const userId = this.options.clientId;
+            const contentObj = {
+                type: "cameraState",
+            };
+            const messageObj = {
+                touchType: "eventSdk",
+                content: JSON.stringify(contentObj),
+            };
+            const message = JSON.stringify(messageObj);
+            const res = await this.sendUserMessage(userId, message);
+        }
+        catch (error) {
+            if (!isRetry) {
+                return;
+            }
+            setTimeout(() => {
+                this.getCameraState(false);
+            }, 1000);
+        }
+    }
+    async updateUiH5(isRetry = false) {
+        try {
+            const userId = this.options.clientId;
+            const contentObj = {
+                type: "updateUiH5",
+            };
+            const messageObj = {
+                touchType: "eventSdk",
+                content: JSON.stringify(contentObj),
+            };
+            const message = JSON.stringify(messageObj);
+            const res = await this.sendUserMessage(userId, message);
+        }
+        catch (error) {
+            if (!isRetry) {
+                return;
+            }
+            setTimeout(() => {
+                this.updateUiH5(false);
+            }, 1000);
+        }
+    }
+    // 模拟点击事件
+    triggerClickEvent(options, forwardOff = false) {
+        this.triggerPointerEvent(0, options, forwardOff);
+        setTimeout(() => {
+            this.triggerPointerEvent(1, options, forwardOff);
+        }, 15 + Math.floor(Math.random() * 11));
+    }
+    // 模拟触摸事件 0 按下 1 抬起 2 触摸中
+    triggerPointerEvent(action, options, forwardOff = false) {
+        const { x, y, width, height } = options;
+        if (action == 0) {
+            this.simulateTouchInfo = generateTouchCoord();
+        }
+        const touchInfo = {
+            action,
+            pointCount: 1,
+            touchType: "gesture",
+            widthPixels: width,
+            heightPixels: height,
+            coords: [
+                {
+                    ...this.simulateTouchInfo,
+                    orientation: 0.01 * Math.random(),
+                    x,
+                    y,
+                },
+            ],
+            properties: [
+                {
+                    id: 0,
+                    toolType: 1,
+                },
+            ],
+        };
+        const userId = this.options.clientId;
+        this.sendUserMessage(userId, JSON.stringify(touchInfo), forwardOff);
+    }
+    /** 远端可见用户加入房间 */
+    onUserJoined() {
+        const that = this;
+        this.engine?.on(VERTC.events.onUserJoined, (user) => {
+            if (user.userInfo?.userId === this.options.clientId) {
+                setTimeout(() => {
+                    that.updateUiH5(true);
+                    that.getCameraState(true);
+                    // 查询输入状态
+                    that.onCheckInputState();
+                    that.setKeyboardStyle(that.options.keyboard);
+                    that.triggerRecoveryTimeCallback();
+                    that.callbacks.onUserJoined?.(user);
+                }, 300);
+            }
+        });
+    }
+    /** 视频首帧渲染 */
+    onRemoteVideoFirstFrame() {
+        this.engine?.on(VERTC.events.onRemoteVideoFirstFrame, async (event) => {
+            try {
+                if (!this.isFirstRotate) {
+                    await this.initRotateScreen(event.width, event.height);
+                }
+                this.metricsReporter?.addParam("FirstFrame" /* ReportEventType.FIRST_FRAME */, {
+                    judgeTime: Date.now(),
+                    result: 1,
+                });
+                this.metricsReporter?.instant("FirstFrame" /* ReportEventType.FIRST_FRAME */);
+            }
+            finally {
+                this.callbacks.onRenderedFirstFrame?.(event);
+            }
+        });
+    }
+    /** 离开 RTC 房间 */
+    async stop() {
+        try {
+            this.disableKeyboardShortcut();
+            clearTimeout(this.metricsTimer);
+            this.metricsTimer = null;
+            clearTimeout(this.autoRecoveryTimer);
+            const { clientId, mediaType } = this.options;
+            const promises = [
+                this.engine?.unsubscribeStream(this.options.clientId, mediaType),
+                this.engine?.stopAudioCapture(),
+                this.engine?.stopVideoCapture(),
+                this.engine?.leaveRoom(),
+                this.groupEngine?.leaveRoom(),
+            ];
+            await Promise.allSettled(promises);
+            this.destroyEngine();
+            this.groupRtc?.close();
+            this.screenShotInstance?.destroy();
+            const videoDomElement = document.getElementById(this.videoDomId);
+            if (videoDomElement && videoDomElement.parentNode) {
+                videoDomElement.parentNode.removeChild(videoDomElement);
+            }
+            // inputService handled in BaseRtc/destroy
+            this.groupEngine = null;
+            this.groupRtc = null;
+            this.screenShotInstance = null;
+        }
+        catch (error) {
+            return Promise.reject(error);
+        }
+    }
+    /** 房间内新增远端摄像头/麦克风采集音视频流的回调 */
+    onUserPublishStream() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
+        const that = this;
+        const handleUserPublishStream = async (e) => {
+            if (e.userId === this.options.clientId) {
+                const player = document.querySelector(`#${that.videoDomId}`);
+                await this.setRemoteVideoRotation(this.rotation);
+                await this.engine?.subscribeStream(this.options.clientId, this.options.mediaType);
+                if (!this.screenShotInstance) {
+                    this.screenShotInstance = new ScreenshotOverlay(player, this.rotation);
+                }
+            }
+        };
+        this.engine?.on(VERTC.events.onUserPublishStream, handleUserPublishStream);
+    }
+    /**
+     * 发送摇一摇信息
+     */
+    sendShakeInfo(time) {
+        const userId = this.options.clientId;
+        const shake = new ShakeSimulator();
+        shake.startShakeSimulation(time, (content) => {
+            const getOptions = (sensorType) => {
+                return JSON.stringify({
+                    coords: [],
+                    heightPixels: 0,
+                    isOpenScreenFollowRotation: false,
+                    keyCode: 0,
+                    pointCount: 0,
+                    properties: [],
+                    text: "",
+                    touchType: TouchType.EVENT_SDK,
+                    widthPixels: 0,
+                    action: 0,
+                    content: JSON.stringify({
+                        ...content,
+                        type: "sdkSensor" /* SdkEventType.SDK_SENSOR */,
+                        sensorType,
+                    }),
+                });
+            };
+            this.sendUserMessage(userId, getOptions("gyroscope"));
+            this.sendUserMessage(userId, getOptions("gravity"));
+            this.sendUserMessage(userId, getOptions("acceleration"));
+        });
+    }
+    checkInputState(msg) {
+        const { allowLocalIMEInCloud, keyboard } = this.options;
+        const msgData = JSON.parse(msg.data);
+        this.roomMessage.inputStateIsOpen = msgData.isOpen;
+        // 仅在 enterkeyhint 存在时设置属性
+        const enterkeyhintText = this.enterkeyhintObj[msgData.imeOptions];
+        if (enterkeyhintText) {
+            this.inputService.getInputElement()?.setAttribute("enterkeyhint", enterkeyhintText);
+        }
+        // 处理输入框焦点逻辑
+        const shouldHandleFocus = (allowLocalIMEInCloud && keyboard === "pad") || keyboard === "local";
+        if (shouldHandleFocus && typeof msgData.isOpen === "boolean") {
+            msgData.isOpen ? this.inputService.focus() : this.inputService.blur();
+        }
+    }
+    /** 监听 onRoomMessageReceived 事件 */
+    onRoomMessageReceived() {
+        const onRoomMessageReceived = async (e) => {
+            if (e.message) {
+                const msg = JSON.parse(e.message);
+                // 消息透传
+                if (msg.key === "message") {
+                    this.callbacks.onTransparentMsg?.(0, msg.data);
+                }
+                // ui消息
+                if (msg.key === "refreshUiType") {
+                    const msgData = JSON.parse(msg.data);
+                    this.roomMessage.isVertical = msgData.isVertical;
+                    // 若宽高没变，则不重新绘制页面
+                    if (msgData.width == this.remoteResolution.width &&
+                        msgData.height == this.remoteResolution.height) {
+                        console.log("宽高没变，不重新绘制页面", this.remoteUserId);
+                        return false;
+                    }
+                    this.initRotateScreen(msgData.width, msgData.height);
+                }
+                // 云机、本机键盘使用消息
+                if (msg.key === "inputState" && this.inputService.getInputElement()) {
+                    this.checkInputState(msg);
+                }
+                // 将云机内容复制到本机剪切板
+                if (msg.key === "clipboard") {
+                    if (this.options.saveCloudClipboard) {
+                        const msgData = JSON.parse(msg.data);
+                        copyText(msgData?.content || "");
+                        this.callbacks.onOutputClipper?.(msgData);
+                    }
+                }
+            }
+        };
+        this.engine?.on(VERTC.events.onRoomMessageReceived, onRoomMessageReceived);
+    }
+    /** 监听 onUserMessageReceived 事件 */
+    onUserMessageReceived() {
+        const that = this;
+        const parseResolution = (resolution) => {
+            const [width, height] = resolution?.split("*").map(Number);
+            return { width, height };
+        };
+        const onUserMessageReceived = async (e) => {
+            if (e.message) {
+                const msg = JSON.parse(e.message);
+                if (msg.key === "callBack" /* MessageKey.CALL_BACK_EVENT */) {
+                    const callData = JSON.parse(msg.data);
+                    const result = JSON.parse(callData.data);
+                    switch (callData.type) {
+                        case "definition" /* MessageKey.DEFINITION */:
+                            this.callbacks.onChangeResolution?.({
+                                from: parseResolution(result.from),
+                                to: parseResolution(result.to),
+                            });
+                            break;
+                        case "startVideoInjection" /* MessageKey.START_INJECTION_VIDEO */:
+                        case "stopVideoInjection" /* MessageKey.STOP_INJECTION_VIDEO */:
+                            const { resolve: injectResolve } = this.promiseMap.injectStatus;
+                            if (injectResolve) {
+                                injectResolve({
+                                    type: callData.type,
+                                    status: result?.isSuccess ? "success" : "error",
+                                    result,
+                                });
+                                this.promiseMap.injectStatus.resolve = null;
+                            }
+                            this.callbacks.onInjectVideoResult?.(callData.type, result);
+                            break;
+                        case "injectionVideoStats" /* MessageKey.INJECTION_VIDEO_STATS */:
+                            const { resolve } = this.promiseMap.streamStatus;
+                            resolve({
+                                path: result.path,
+                                status: result.status || (result.path ? "live" : "offline"),
+                                type: "video",
+                            });
+                            break;
+                        case "operateSwitch" /* MessageKey.OPERATE_SWITCH */:
+                            this.callbacks.onMonitorOperation?.(result);
+                            break;
+                    }
+                }
+                if (msg.key === "equipmentInfo" /* MessageKey.EQUIPMENT_INFO */) {
+                    this.callbacks.onEquipmentInfo?.(JSON.parse(msg.data || []));
+                }
+                if (msg.key === "inputAdb" /* MessageKey.INPUT_ADB */) {
+                    this.callbacks.onAdbOutput?.(JSON.parse(msg.data || {}));
+                }
+                // 音视频采集
+                if (msg.key === "videoAndAudioControl" /* MessageKey.VIDEO_AND_AUDIO_CONTROL */) {
+                    const msgData = JSON.parse(msg.data);
+                    this.callbacks.onMediaDevicesToggle?.({
+                        type: "media",
+                        enabled: msgData.isOpen,
+                        isFront: msgData.isFront,
+                    });
+                    if (!this.enableMicrophone && !this.enableCamera) {
+                        return;
+                    }
+                    const pushType = this.enableMicrophone && this.enableCamera
+                        ? MediaType.AUDIO_AND_VIDEO
+                        : this.enableCamera
+                            ? MediaType.VIDEO
+                            : MediaType.AUDIO;
+                    if (msgData.isOpen) {
+                        if (this.enableCamera) {
+                            await this.cameraInject(msgData);
+                        }
+                        if (this.enableMicrophone) {
+                            await this.microphoneInject();
+                        }
+                    }
+                    else {
+                        await this.stopMediaStream(pushType);
+                    }
+                }
+                // 云机、本机键盘使用消息
+                if (msg.key === "inputState" /* MessageKey.INPUT_STATE */ && this.inputService.getInputElement()) {
+                    this.checkInputState(msg);
+                }
+                // 视频采集
+                if (msg.key === "videoControl" /* MessageKey.VIDEO_CONTROL */) {
+                    const msgData = JSON.parse(msg.data);
+                    this.callbacks.onMediaDevicesToggle?.({
+                        type: "camera",
+                        enabled: msgData.isOpen,
+                        isFront: msgData.isFront,
+                    });
+                    if (!this.enableCamera) {
+                        return;
+                    }
+                    if (msgData.isOpen) {
+                        await this.cameraInject(msgData);
+                    }
+                    else {
+                        await this.stopMediaStream(MediaType.VIDEO);
+                    }
+                }
+                // 音频采集
+                if (msg.key === "audioControl" /* MessageKey.AUDIO_CONTROL */) {
+                    const msgData = JSON.parse(msg.data);
+                    this.callbacks.onMediaDevicesToggle?.({
+                        type: "microphone",
+                        enabled: msgData.isOpen,
+                    });
+                    if (!this.enableMicrophone) {
+                        return;
+                    }
+                    if (msgData.isOpen) {
+                        await this.microphoneInject();
+                    }
+                    else {
+                        await this.stopMediaStream(MediaType.AUDIO);
+                    }
+                }
+            }
+        };
+        that.engine?.on(VERTC.events.onUserMessageReceived, onUserMessageReceived);
+    }
+    /**
+     * 将字符串发送到云手机的粘贴板中
+     * @param inputStr 需要发送的字符串
+     */
+    async sendInputClipper(inputStr, forwardOff = false) {
+        const userId = this.options.clientId;
+        const message = JSON.stringify({
+            text: inputStr,
+            touchType: TouchType.CLIPBOARD,
+        });
+        await this.sendUserMessage(userId, message, forwardOff);
+    }
+    /**
+     * 当云手机处于输入状态时，将字符串直接发送到云手机，完成输入
+     * @param inputStr 需要发送的字符串
+     */
+    async sendInputString(inputStr, forwardOff = false) {
+        const userId = this.options.clientId;
+        const message = JSON.stringify({
+            text: inputStr,
+            touchType: TouchType.INPUT_BOX,
+        });
+        await this.sendUserMessage(userId, message, forwardOff);
+    }
+    /** 清晰度切换 */
+    setStreamConfig(config, forwardOff = true) {
+        const regExp = /^[1-9]\d*$/;
+        // 判断字段是否缺失
+        if (config.definitionId && config.framerateId && config.bitrateId) {
+            const values = Object.values(config);
+            // 判断输入值是否为正整数
+            if (values.every((value) => regExp.test(value))) {
+                const contentObj = {
+                    type: "definitionUpdata" /* SdkEventType.DEFINITION_UPDATE */,
+                    definitionId: config.definitionId,
+                    framerateId: config.framerateId,
+                    bitrateId: config.bitrateId,
+                };
+                const messageObj = {
+                    touchType: TouchType.EVENT_SDK,
+                    content: JSON.stringify(contentObj),
+                };
+                const userId = this.options.clientId;
+                const message = JSON.stringify(messageObj);
+                this.sendUserMessage(userId, message, forwardOff);
+            }
+        }
+    }
+    /**
+     * 暂停接收来自远端的媒体流
+     * 该方法仅暂停远端流的接收，并不影响远端流的采集和发送。
+     * @param mediaType 1 只控制音频; 2 只控制视频; 3 同时控制音频和视频
+     */
+    pauseAllSubscribedStream(mediaType = 3) {
+        // 重置无操作回收定时器
+        this.triggerRecoveryTimeCallback();
+        const contentObj = {
+            type: "openAudioAndVideo" /* MediaOperationType.OPEN_AUDIO_AND_VIDEO */,
+            isOpen: false,
+        };
+        const messageObj = {
+            touchType: TouchType.EVENT_SDK,
+            content: JSON.stringify(contentObj),
+        };
+        const userId = this.options.clientId;
+        const message = JSON.stringify(messageObj);
+        this.engine?.sendUserMessage(userId, message);
+        return this.engine?.pauseAllSubscribedStream(mediaType);
+    }
+    /**
+     * 恢复接收来自远端的媒体流
+     * 该方法仅恢复远端流的接收，并不影响远端流的采集和发送。
+     * @param mediaType 1 只控制音频; 2 只控制视频; 3 同时控制音频和视频
+     */
+    resumeAllSubscribedStream(mediaType = 3) {
+        // 重置无操作回收定时器
+        this.triggerRecoveryTimeCallback();
+        // 防止用户在自动拉取音视频流失败时，没手动开启
+        this.startPlay();
+        if (mediaType !== 3) {
+            return this.engine?.resumeAllSubscribedStream(mediaType);
+        }
+        const contentObj = {
+            type: "openAudioAndVideo" /* MediaOperationType.OPEN_AUDIO_AND_VIDEO */,
+            isOpen: true,
+        };
+        const messageObj = {
+            touchType: TouchType.EVENT_SDK,
+            content: JSON.stringify(contentObj),
+        };
+        const userId = this.options.clientId;
+        const message = JSON.stringify(messageObj);
+        this.sendUserMessage(userId, message);
+        return this.engine?.resumeAllSubscribedStream(mediaType);
+    }
+    async setRemoteVideoRotation(rotation) {
+        const player = document.querySelector(`#${this.videoDomId}`);
+        await this.engine?.setRemoteVideoPlayer(StreamIndex.STREAM_INDEX_MAIN, {
+            userId: this.options.clientId,
+            renderDom: player,
+            renderMode: 2,
+            rotation,
+        });
+    }
+    // 修改屏幕分辨率和dpi
+    setScreenResolution(options, forwardOff = true) {
+        const contentObj = options.type === "updateDensity" /* MessageKey.UPDATE_DENSITY */
+            ? {
+                type: options.type,
+                width: options.width,
+                height: options.height,
+                density: options.dpi,
+            }
+            : {
+                type: options.type,
+            };
+        const userId = this.options.clientId;
+        const message = this.getMsgTemplate(TouchType.EVENT_SDK, contentObj);
+        this.sendUserMessage(userId, message, forwardOff);
+    }
+    /**
+     * 订阅房间内指定的通过摄像头/麦克风采集的媒体流。
+     */
+    async subscribeStream(mediaType) {
+        return await this.engine?.subscribeStream(this.options.clientId, mediaType);
+    }
+    /** 旋转截图 */
+    setScreenshotRotation(rotation = 0) {
+        // this.screenShotInstance?.setScreenshotRotation(rotation);
+    }
+    /** 生成封面图 */
+    takeScreenshot(rotation = 0) {
+        this.screenShotInstance?.takeScreenshot(rotation);
+    }
+    /** 重新设置大小 */
+    resizeScreenshot(width, height) {
+        this.screenShotInstance?.resizeScreenshot(width, height);
+    }
+    /** 显示封面图 */
+    showScreenShot() {
+        this.screenShotInstance?.showScreenShot();
+    }
+    /** 显示封面图 */
+    hideScreenShot() {
+        this.screenShotInstance?.hideScreenShot();
+    }
+    /** 清空封面图 */
+    clearScreenShot() {
+        this.screenShotInstance?.clearScreenShot();
+    }
+    /**
+     * 取消订阅房间内指定的通过摄像头/麦克风采集的媒体流。
+     */
+    unsubscribeStream(mediaType) {
+        return this.engine?.unsubscribeStream(this.options.clientId, mediaType);
+    }
+    /** 截图-保存到本地 */
+    saveScreenShotToLocal() {
+        const userId = this.options.clientId;
+        return this.engine?.takeRemoteSnapshot(userId, 0) || Promise.reject("Engine not initialized");
+    }
+    /** 截图-保存到云机 */
+    saveScreenShotToRemote() {
+        const contentObj = {
+            type: "localScreenshot" /* SdkEventType.LOCAL_SCREENSHOT */,
+        };
+        const messageObj = {
+            touchType: TouchType.EVENT_SDK,
+            content: JSON.stringify(contentObj),
+        };
+        const userId = this.options.clientId;
+        const message = JSON.stringify(messageObj);
+        this.sendUserMessage(userId, message);
+    }
+    /**
+     * 手动横竖屏：0竖屏，1横屏
+     * 对标百度API
+     */
+    setPhoneRotation(type) {
+        this.triggerRecoveryTimeCallback();
+        this.rotateScreen(type);
+    }
+    getRotateType() {
+        return this.rotateType;
+    }
+    async initRotateScreen(width, height) {
+        // 移动端需要强制竖屏
+        if (isTouchDevice() || isMobile()) {
+            this.options.rotateType = 0;
+        }
+        const { rotateType } = this.options;
+        if (rotateType && this.isFirstRotate) {
+            return;
+        }
+        /** 是否首次旋转 */
+        if (!this.isFirstRotate) {
+            this.isFirstRotate = true;
+        }
+        // 存储云机分辨率
+        Object.assign(this.remoteResolution, {
+            width,
+            height,
+        });
+        // 0 为竖屏，1 为横屏
+        let targetRotateType;
+        // 判断是否为 0 或 1
+        if (rotateType == 0 || rotateType == 1) {
+            targetRotateType = rotateType;
+        }
+        else {
+            // 根据宽高自动设置旋转类型，
+            targetRotateType = width > height ? 1 : 0;
+        }
+        await this.rotateScreen(targetRotateType);
+    }
+    /**
+     * 旋转屏幕
+     * @param type 横竖屏：0竖屏，1横屏
+     */
+    async rotateScreen(type) {
+        this.rotateType = type;
+        try {
+            await this.callbacks.onBeforeRotate?.(type);
+        }
+        catch (error) { }
+        // 获取父元素（调用方）的原始宽度和高度，这里要重新获取，因为外层的div可能宽高发生变化
+        const h5Dom = document.getElementById(this.initDomId);
+        if (!h5Dom)
+            return;
+        let parentWidth = h5Dom.clientWidth > window.innerWidth
+            ? window.innerWidth
+            : h5Dom.clientWidth;
+        let parentHeight = h5Dom.clientHeight > window.innerHeight
+            ? window.innerHeight
+            : h5Dom.clientHeight;
+        let bigSide = parentHeight;
+        let smallSide = parentWidth;
+        if (parentWidth > parentHeight) {
+            bigSide = parentWidth;
+            smallSide = parentHeight;
+        }
+        const wrapperBox = h5Dom.parentElement;
+        const wrapperBoxWidth = wrapperBox.clientWidth;
+        const toolsWidth = this.options.toolsWidth ?? 0;
+        if (type == RotateDirection.LANDSCAPE) {
+            if (toolsWidth) {
+                parentWidth =
+                    bigSide > wrapperBoxWidth ? wrapperBoxWidth - toolsWidth : bigSide;
+            }
+            else {
+                parentWidth = bigSide;
+            }
+            parentHeight = smallSide;
+        }
+        else {
+            parentWidth = smallSide;
+            parentHeight = bigSide;
+        }
+        h5Dom.style.width = parentWidth + "px";
+        h5Dom.style.height = parentHeight + "px";
+        const videoIsLandscape = this.remoteResolution.width > this.remoteResolution.height;
+        // 外层 div
+        let armcloudVideoWidth = 0;
+        let armcloudVideoHeight = 0;
+        // 旋转角度
+        let videoWrapperRotate = 0;
+        const videoDom = document.getElementById(this.videoDomId);
+        if (type == 1) {
+            const w = videoIsLandscape
+                ? this.remoteResolution.width
+                : this.remoteResolution.height;
+            const h = videoIsLandscape
+                ? this.remoteResolution.height
+                : this.remoteResolution.width;
+            const scale = Math.min(parentWidth / w, parentHeight / h);
+            armcloudVideoWidth = w * scale;
+            armcloudVideoHeight = h * scale;
+            videoWrapperRotate = videoIsLandscape ? 0 : 270;
+        }
+        else {
+            // 竖屏处理
+            const w = videoIsLandscape
+                ? this.remoteResolution.height
+                : this.remoteResolution.width;
+            const h = videoIsLandscape
+                ? this.remoteResolution.width
+                : this.remoteResolution.height;
+            const scale = Math.min(parentWidth / w, parentHeight / h);
+            armcloudVideoWidth = w * scale;
+            armcloudVideoHeight = h * scale;
+            videoWrapperRotate = videoIsLandscape ? 90 : 0;
+        }
+        this.rotation = videoWrapperRotate;
+        // armcloudVideo
+        videoDom.style.width = `${armcloudVideoWidth}px`;
+        videoDom.style.height = `${armcloudVideoHeight}px`;
+        await this.setRemoteVideoRotation(videoWrapperRotate);
+        this.callbacks.onChangeRotate?.(type, {
+            width: armcloudVideoWidth,
+            height: armcloudVideoHeight,
+        });
+    }
+    /** 触发快捷键 */
+    triggerKeyboardShortcut(metaState, keyCode, forwardOff = true) {
+        const content = JSON.stringify({
+            touchType: "shortcutKey" /* MessageKey.SHORTCUT_KEY */,
+            metaState: metaState + "",
+            keyCode: keyCode + "",
+        });
+        const userId = this.options.clientId;
+        this.sendUserMessage(userId, content, forwardOff);
+    }
+    /** 手动定位 */
+    setGPS(longitude, latitude) {
+        const contentObj1 = {
+            latitude,
+            longitude,
+            time: new Date().getTime(),
+        };
+        const contentObj2 = {
+            type: "sdkLocation",
+            content: JSON.stringify(contentObj1),
+        };
+        const messageObj = {
+            touchType: "eventSdk",
+            content: JSON.stringify(contentObj2),
+        };
+        const userId = this.options.clientId;
+        const message = JSON.stringify(messageObj);
+        console.log("手动传入经纬度", message);
+        this.sendUserMessage(userId, message);
+    }
+    /** 停止或开启群控同步 */
+    toggleGroupControlSync(flag = true) {
+        if (!this.isGroupControl)
+            return;
+        this.groupControlSync = flag;
+    }
+    executeAdbCommand(command, forwardOff = true) {
+        const userId = this.options.clientId;
+        const message = JSON.stringify({
+            touchType: "eventSdk",
+            content: JSON.stringify({
+                type: "inputAdb",
+                content: command,
+            }),
+        });
+        this.sendUserMessage(userId, message, forwardOff);
+    }
+    /** 云机/本地键盘切换(false-云机键盘，true-本地键盘) */
+    setKeyboardStyle(keyBoardType) {
+        const contentObj = {
+            type: "keyBoardType",
+            isLocalKeyBoard: keyBoardType === "local",
+        };
+        const messageObj = {
+            touchType: "eventSdk",
+            content: JSON.stringify(contentObj),
+        };
+        const userId = this.options.clientId;
+        const message = JSON.stringify(messageObj);
+        this.options.keyboard = keyBoardType;
+        this.sendUserMessage(userId, message);
+    }
+    /** 查询输入状态 */
+    async onCheckInputState() {
+        const userId = this.options.clientId;
+        const message = JSON.stringify({
+            touchType: "inputState",
+        });
+        await this.sendUserMessage(userId, message);
+    }
+    /**
+     * 设置无操作回收时间
+     * @param second 秒 默认300s,最大7200s
+     */
+    setAutoRecycleTime(second) {
+        // 设置过期时间，单位为毫秒
+        this.options.autoRecoveryTime = second;
+        // 定时器，当指定时间内无操作时执行离开房间操作
+        this.triggerRecoveryTimeCallback();
+    }
+    /** 获取无操作回收时间 */
+    getAutoRecycleTime() {
+        return this.options.autoRecoveryTime;
+    }
+    /** 调整坐标 */
+    reshapeWindow() { }
+    /** 底部栏操作按键 */
+    sendCommand(command, forwardOff = false) {
+        // 定义按键映射表 兼容老版本
+        const keyCodeMap = {
+            back: 4,
+            home: 3,
+            menu: 187,
+        };
+        // 获取keyCode,如果command不在映射表中则使用command本身
+        const keyCode = keyCodeMap[command] ?? command;
+        const messageObj = {
+            action: 1,
+            touchType: "keystroke",
+            keyCode,
+            text: "",
+        };
+        const userId = this.options.clientId;
+        if (!userId)
+            return;
+        const message = JSON.stringify(messageObj);
+        this.sendUserMessage(userId, message, forwardOff);
+    }
+    /**  注入视频到相机 */
+    injectVideoStream(type, options, timeout = 0, forwardOff = true) {
+        return new Promise(async (resolve) => {
+            const userId = this.options.clientId;
+            if (!userId)
+                return;
+            let timeoutHandler = null;
+            if (timeout) {
+                timeoutHandler = setTimeout(() => {
+                    resolve({
+                        type,
+                        status: "timeout",
+                        result: null,
+                    });
+                }, timeout);
+            }
+            try {
+                // 保存resolve函数以便在收到响应时调用
+                Object.assign(this.promiseMap.injectStatus, {
+                    resolve: (result) => {
+                        if (timeoutHandler)
+                            clearTimeout(timeoutHandler);
+                        resolve(result);
+                    },
+                });
+                const message = JSON.stringify({
+                    touchType: TouchType.EVENT_SDK,
+                    content: JSON.stringify(type === "startVideoInjection" /* MessageKey.START_INJECTION_VIDEO */
+                        ? {
+                            type,
+                            fileUrl: options?.fileUrl,
+                            isLoop: options?.isLoop ?? true,
+                            fileName: options?.fileName,
+                        }
+                        : {
+                            type,
+                        }),
+                });
+                await this.sendUserMessage(userId, message, forwardOff);
+            }
+            catch {
+                resolve({
+                    type,
+                    status: "unknown",
+                    result: null,
+                });
+            }
+        });
+    }
+    /** 音量增加按键事件 */
+    increaseVolume(forwardOff = true) {
+        // 防止用户在自动拉取音视频流失败时，没手动开启
+        this.startPlay();
+        const messageObj = {
+            action: 1,
+            touchType: TouchType.KEYSTROKE,
+            keyCode: 24,
+            text: "",
+        };
+        const userId = this.options.clientId;
+        const message = JSON.stringify(messageObj);
+        if (userId) {
+            // 按下
+            this.sendUserMessage(userId, message, forwardOff);
+        }
+    }
+    /** 音量减少按键事件 */
+    decreaseVolume(forwardOff = true) {
+        // 防止用户在自动拉取音视频流失败时，没手动开启
+        this.startPlay();
+        const messageObj = {
+            action: 1,
+            touchType: TouchType.KEYSTROKE,
+            keyCode: 25,
+            text: "",
+        };
+        const userId = this.options.clientId;
+        const message = JSON.stringify(messageObj);
+        if (userId) {
+            // 按下
+            this.sendUserMessage(userId, message, forwardOff);
+        }
+    }
+    /**
+     * 是否接收粘贴板内容回调
+     * @param flag true:接收 false:不接收
+     */
+    saveCloudClipboard(flag) {
+        this.options.saveCloudClipboard = flag;
+    }
+}
+
+class RtcFactory {
+    /**
+     * Tạo instance RTC dựa trên streamType
+     * @param streamType 1: WebRtc, 2: TcgRtc, 3: CustomRtc
+     * @param viewId View container ID
+     * @param options Cấu hình RTC
+     * @param callbacks Callbacks của SDK
+     */
+    static create(streamType, viewId, options, callbacks) {
+        switch (streamType) {
+            case 1:
+                return new CustomRtc(viewId, options, callbacks);
+            case 2:
+                return new WebRtc(viewId, options, callbacks);
+            case 3:
+                return new TcgRtc(viewId, options, callbacks);
+            default:
+                throw new Error(`Unsupported streamType: ${streamType}`);
+        }
+    }
+}
+
 class ArmcloudEngine {
     // SDK版本号
     version = "1.5.5";
@@ -6768,6 +6758,9 @@ class ArmcloudEngine {
             throw new Error("baseUrl 不能为空");
         }
         // 初始化逻辑
+        this.applyToken(params);
+    }
+    applyToken(params) {
         let uuid = this.rtcOptions?.uuid || "";
         if (!uuid) {
             uuid = localStorage.getItem("armcloud_uuid") || this.generateUUID();
@@ -6801,7 +6794,7 @@ class ArmcloudEngine {
                     this.rtcOptions.roomCode = response.data.data.roomCode;
                     this.rtcOptions.roomToken = response.data.data.roomToken;
                     // 创建引擎对象
-                    this.rtcInstance = new customRtc(params.viewId, this.rtcOptions, this.callbacks);
+                    this.rtcInstance = RtcFactory.create(this.streamType, params.viewId, this.rtcOptions, this.callbacks);
                     this.callbacks?.onInit?.({
                         code: COMMON_CODE.SUCCESS,
                         msg: "初始化成功",
@@ -6815,7 +6808,7 @@ class ArmcloudEngine {
                     this.rtcOptions.stuns = response.data.data.stuns;
                     this.rtcOptions.turns = response.data.data.turns;
                     // 创建引擎对象
-                    this.rtcInstance = new WebRTC(params.viewId, this.rtcOptions, this.callbacks);
+                    this.rtcInstance = RtcFactory.create(this.streamType, params.viewId, this.rtcOptions, this.callbacks);
                     this.callbacks?.onInit?.({
                         code: COMMON_CODE.SUCCESS,
                         msg: "初始化成功",
@@ -6826,7 +6819,7 @@ class ArmcloudEngine {
                 else if (this.streamType == 3) {
                     this.rtcOptions.accessInfo = response.data.data.accessInfo;
                     this.rtcOptions.roomToken = response.data.data.roomToken;
-                    this.rtcInstance = new tcgRtc(params.viewId, this.rtcOptions, this.callbacks);
+                    this.rtcInstance = RtcFactory.create(this.streamType, params.viewId, this.rtcOptions, this.callbacks);
                     console.log(response.data.data);
                     this.callbacks?.onInit?.({
                         code: COMMON_CODE.SUCCESS,
@@ -7003,17 +6996,8 @@ class ArmcloudEngine {
             return this.rtcInstance.getInjectStreamStatus(type, timeout);
     }
     /** 生成uuid */
-    // eslint-disable-next-line class-methods-use-this
     generateUUID() {
-        // 生成UUID v4
-        return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-            // eslint-disable-next-line no-bitwise
-            const r = (Math.random() * 16) | 0;
-            // eslint-disable-next-line no-bitwise
-            const v = c === "x" ? r : (r & 0x3) | 0x8;
-            const uuid = v.toString(16);
-            return uuid;
-        });
+        return generateUUID();
     }
     getRequestId() {
         // @ts-ignore
