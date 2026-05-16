@@ -70,10 +70,7 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
 
     private groupPads: Array<string> = [];
 
-    private promiseMap: any = {
-        streamStatus: {},
-        injectStatus: {},
-    };
+
 
 
 
@@ -87,11 +84,7 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
     // 旋转方向
     private rotateType: RotateDirection | undefined = undefined;
 
-    // 远端输入框状态
-    private remoteInputState: any = {
-        isOpen: false,
-        imeOptions: "",
-    };
+
 
     // 上一次推流分辨率大小
     private lastStreamResolution: {
@@ -115,23 +108,7 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
             degree: 0,
         };
 
-    /**
-     * 安卓对应回车值
-     * go：前往 2
-     * search：搜索 3
-     * send：发送 4
-     * next：下一个 5
-     * done：完成 6
-     * previous：上一个 7
-     */
-    private enterkeyhintObj: Record<number, string> = {
-        2: "go",
-        3: "search",
-        4: "send",
-        5: "next",
-        6: "done",
-        7: "previous",
-    };
+
 
     constructor(
         initDomId: string,
@@ -155,12 +132,7 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
     }
 
 
-    setMicrophone(val: boolean) {
-        this.enableMicrophone = val;
-    }
-    setCamera(val: boolean) {
-        this.enableCamera = val;
-    }
+
 
     /** 设置摄像头设备 */
     async setVideoDeviceId(val: string) {
@@ -189,8 +161,7 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
         );
     }
 
-    /** 触发无操作回收回调函数 */
-    triggerRecoveryTimeCallback() { }
+
 
     setVideoEncoder(width: number, height: number) {
         this.TCGSDK.setRemoteDesktopResolution({ width, height });
@@ -518,19 +489,7 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
         return support.RTCPeerConnection && support.RTCDataChannel;
     }
 
-    /**
-     * 设置无操作回收时间
-     * @param second 秒 默认300s,最大7200s
-     */
-    setAutoRecycleTime(second: number) {
-        // 设置过期时间，单位为毫秒
-        this.options.autoRecoveryTime = second;
-    }
 
-    /** 获取无操作回收时间 */
-    getAutoRecycleTime() {
-        return this.options.autoRecoveryTime;
-    }
 
     /** 停止或开启群控同步 */
     public toggleGroupControlSync(flag: boolean = true) {

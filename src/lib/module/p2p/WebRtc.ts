@@ -55,17 +55,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
 
   // 群控同步
   private groupControlSync: boolean = true;
-  // 当前推流状态promise 缓存
-  private promiseMap: any = {
-    streamStatus: {
-      resolve: () => { },
-      reject: () => { },
-    },
-    injectStatus: {
-      resolve: null,
-      reject: null,
-    },
-  };
+
   private remoteResolution = {
     width: 0,
     height: 0,
@@ -87,41 +77,15 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
   private dataChannel: any;
 
 
-  // 回收时间定时器
-  private autoRecoveryTimer: any = null;
+
   // 运行信息定时器
   private runInfoTimer: any = null;
 
-  // 触摸信息
-  private touchConfig: any = {
-    action: 0, // 0 按下 1 抬起 2 触摸中
-    widthPixels: document.body.clientWidth,
-    heightPixels: document.body.clientHeight,
-    pointCount: 1, // 手指操作数量
-    touchType: TouchType.GESTURE,
-    properties: [], // 手指id， toolType: 1写死
-    coords: [], // 操作坐标 pressure: 1.0, size: 1.0,写死
-  };
+
 
   // 触摸坐标信息
   private touchInfo: TouchInfo = generateTouchCoord();
-  /**
-   * 安卓对应回车值
-   * go：前往 2
-   * search：搜索 3
-   * send：发送 4
-   * next：下一个 5
-   * done：完成 6
-   * previous：上一个 7
-   */
-  public enterkeyhintObj: Record<number, string> = {
-    2: "go",
-    3: "search",
-    4: "send",
-    5: "next",
-    6: "done",
-    7: "previous",
-  };
+
 
   private socketParams: any;
 
@@ -1823,24 +1787,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
   }
 
   /** 触发无操作回收回调函数 */
-  private triggerRecoveryTimeCallback() {
-    if (
-      this.options.disable ||
-      !this.options.autoRecoveryTime ||
-      this.isCameraInject ||
-      this.isMicrophoneInject
-    )
-      return;
-    if (this.autoRecoveryTimer) {
-      clearTimeout(this.autoRecoveryTimer);
-      this.autoRecoveryTimer = null;
-    }
-    if (this.stopOperation) return;
-    this.autoRecoveryTimer = setTimeout(() => {
-      this.destroy();
-      this.callbacks?.onAutoRecoveryTime?.();
-    }, this.options.autoRecoveryTime * 1000);
-  }
+
 
   /** 发送消息 */
   async sendUserMessage(message: string, notRecycling = false) {
@@ -1854,15 +1801,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
     }
   }
 
-  public setMicrophone(val: boolean) {
-    if (this.stopOperation) return;
-    this.enableMicrophone = val;
-  }
 
-  public setCamera(val: boolean) {
-    if (this.stopOperation) return;
-    this.enableCamera = val;
-  }
   public setMonitorOperation(isMonitor: boolean, forwardOff: boolean = true) { }
 
   /** 监听广播消息 */

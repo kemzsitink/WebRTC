@@ -38,16 +38,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
     height: 0,
   };
 
-  // 触摸信息
-  private touchConfig: any = {
-    action: 0, // 0 按下 1 抬起 2 触摸中
-    widthPixels: document.body.clientWidth,
-    heightPixels: document.body.clientHeight,
-    pointCount: 1, // 手指操作数量
-    touchType: "gesture",
-    properties: [], // 手指id， toolType: 1写死
-    coords: [], // 操作坐标 pressure: 1.0, size: 1.0,写死
-  };
+
   // 键盘快捷键监听函数
   private _listenKeyboardShortcut: (e: KeyboardEvent) => void = () => {};
   // 云手机容器是否处于活跃交互状态
@@ -66,22 +57,10 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
 
 
 
-  // 当前推流状态promise 缓存
-  private promiseMap: any = {
-    streamStatus: {
-      resolve: () => {},
-      reject: () => {},
-    },
-    injectStatus: {
-      resolve: null,
-      reject: null,
-    },
-  };
 
   public roomMessage: any = {};
 
-  // 回收时间定时器
-  public autoRecoveryTimer: any = null;
+
 
   public isFirstFrame: boolean = false;
 
@@ -93,23 +72,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
   // 埋点定时器
   private metricsTimer: any = null;
 
-  /**
-   * 安卓对应回车值
-   * go：前往 2
-   * search：搜索 3
-   * send：发送 4
-   * next：下一个 5
-   * done：完成 6
-   * previous：上一个 7
-   */
-  public enterkeyhintObj: Record<number, string> = {
-    2: "go",
-    3: "search",
-    4: "send",
-    5: "next",
-    6: "done",
-    7: "previous",
-  };
+
 
 
 
@@ -154,12 +117,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
     return VERTC.isSupported();
   }
 
-  setMicrophone(val: boolean) {
-    this.enableMicrophone = val;
-  }
-  setCamera(val: boolean) {
-    this.enableCamera = val;
-  }
+
 
   /** 设置摄像头设备 */
   async setVideoDeviceId(val: string) {
@@ -190,27 +148,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
     );
   }
 
-  /** 触发无操作回收回调函数 */
-  triggerRecoveryTimeCallback() {
-    if (
-      this.options.disable ||
-      !this.options.autoRecoveryTime ||
-      this.isCameraInject ||
-      this.isMicrophoneInject
-    ) {
-      return;
-    }
 
-    if (this.autoRecoveryTimer) {
-      // console.log("清除计时器");
-      clearTimeout(this.autoRecoveryTimer);
-    }
-    this.autoRecoveryTimer = setTimeout(() => {
-      console.log("触发无操作回收了");
-      this.stop();
-      this.callbacks.onAutoRecoveryTime?.();
-    }, this.options.autoRecoveryTime * 1000);
-  }
 
   setVideoEncoder(width: number, height: number) {
     if (!width || !height) {

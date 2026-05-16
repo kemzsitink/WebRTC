@@ -130,3 +130,9 @@ export const PROGRESS_INFO = {
     msg: "VIDEO第一帧渲染成功",
   },
 };
+
+export enum StreamType {
+  CUSTOM = 1,
+  WEBRTC = 2,
+  TCGRTC = 3,
+}

@@ -3,11 +3,12 @@ import { IRtcInstance } from "../../types/rtcInterface";
 import WebRtc from "../p2p/WebRtc";
 import TcgRtc from "../tcg/TcgRtc";
 import CustomRtc from "../volc/CustomRtc";
+import { StreamType } from "../../constant/index";
 
 export class RtcFactory {
   /**
    * Tạo instance RTC dựa trên streamType
-   * @param streamType 1: WebRtc, 2: TcgRtc, 3: CustomRtc
+   * @param streamType 1: CustomRtc (Volcengine), 2: WebRtc (P2P), 3: TcgRtc (Tencent)
    * @param viewId View container ID
    * @param options Cấu hình RTC
    * @param callbacks Callbacks của SDK
@@ -19,11 +20,11 @@ export class RtcFactory {
     callbacks: ArmcloudCallbacks
   ): IRtcInstance {
     switch (streamType) {
-      case 1:
+      case StreamType.CUSTOM:
         return new CustomRtc(viewId, options, callbacks);
-      case 2:
+      case StreamType.WEBRTC:
         return new WebRtc(viewId, options, callbacks);
-      case 3:
+      case StreamType.TCGRTC:
         return new TcgRtc(viewId, options, callbacks);
       default:
         throw new Error(`Unsupported streamType: ${streamType}`);

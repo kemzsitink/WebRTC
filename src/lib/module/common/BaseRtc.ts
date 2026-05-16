@@ -19,6 +19,42 @@ export abstract class BaseRtc implements IRtcInstance {
   protected inputService: InputService;
   protected groupRtc: IGroupControl | null = null;
 
+  protected promiseMap: any = {
+    streamStatus: {
+      resolve: () => {},
+      reject: () => {},
+    },
+    injectStatus: {
+      resolve: null,
+      reject: null,
+    },
+  };
+
+  protected touchConfig: any = {
+    action: 0,
+    widthPixels: document.body.clientWidth,
+    heightPixels: document.body.clientHeight,
+    pointCount: 1,
+    touchType: TouchType.GESTURE,
+    properties: [],
+    coords: [],
+  };
+
+  protected autoRecoveryTimer: any = null;
+
+  protected enterkeyhintObj: Record<number, string> = {
+    2: "go",
+    3: "search",
+    4: "send",
+    5: "next",
+    6: "done",
+    7: "previous",
+  };
+
+  protected remoteInputState: any = {
+    isOpen: false,
+    imeOptions: "",
+  };
 
   constructor(
     protected initDomId: string,
@@ -62,6 +98,41 @@ export abstract class BaseRtc implements IRtcInstance {
     });
   }
 
+  public setMicrophone(val: boolean) {
+    this.enableMicrophone = val;
+  }
+
+  public setCamera(val: boolean) {
+    this.enableCamera = val;
+  }
+
+  public setAutoRecycleTime(second: number) {
+    this.options.autoRecoveryTime = second;
+  }
+
+  public getAutoRecycleTime(): number | undefined {
+    return this.options.autoRecoveryTime;
+  }
+
+  protected triggerRecoveryTimeCallback() {
+    if (
+      this.options.disable ||
+      !this.options.autoRecoveryTime ||
+      this.isCameraInject ||
+      this.isMicrophoneInject
+    ) {
+      return;
+    }
+
+    if (this.autoRecoveryTimer) {
+      clearTimeout(this.autoRecoveryTimer);
+    }
+    this.autoRecoveryTimer = setTimeout(() => {
+      this.stop();
+      this.callbacks.onAutoRecoveryTime?.();
+    }, this.options.autoRecoveryTime * 1000);
+  }
+
   // --- IRtcInstance methods to be implemented by subclasses ---
   abstract start(isGroupControl?: boolean, pads?: string[]): void;
   abstract stop(): Promise<void> | void;
@@ -71,8 +142,6 @@ export abstract class BaseRtc implements IRtcInstance {
   abstract getInjectStreamStatus(type: InjectStreamStatusType, timeout?: number): Promise<any> | any;
   abstract triggerClickEvent(options: { x: number; y: number; width: number; height: number }, forwardOff?: boolean): void;
   abstract triggerPointerEvent(action: 0 | 1 | 2, options: { x: number; y: number; width: number; height: number }, forwardOff?: boolean): void;
-  abstract setMicrophone(val: boolean): void;
-  abstract setCamera(val: boolean): void;
   abstract startPlay(): Promise<void> | void;
   abstract setViewSize(width: number, height: number, rotateType?: 0 | 1): void;
   abstract joinGroupRoom(pads?: string[]): void;
@@ -105,8 +174,6 @@ export abstract class BaseRtc implements IRtcInstance {
   abstract setGPS(longitude: number, latitude: number): void;
   abstract executeAdbCommand(command: string, forwardOff?: boolean): void;
   abstract setKeyboardStyle(keyBoardType: KeyboardMode): void;
-  abstract setAutoRecycleTime(second: number): void;
-  abstract getAutoRecycleTime(): number | undefined;
   abstract sendCommand(command: string, forwardOff?: boolean): void;
   abstract increaseVolume(forwardOff?: boolean): void;
   abstract decreaseVolume(forwardOff?: boolean): void;
