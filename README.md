@@ -1,53 +1,51 @@
 # Armcloud RTC SDK
 
-SDK hỗ trợ kết nối và điều khiển Cloud Phone/Cloud Gaming qua WebRTC với 3 Engine chính: Volcengine (CustomRtc), P2P (WebRtc), và Tencent (TcgRtc).
+A high-performance WebRTC SDK for connecting and controlling **Cloud Phone / Cloud Gaming** instances. Supports Volcengine, P2P, and Tencent Cloud Gaming engines.
 
-## Tính năng mới (v1.5.9+)
+## Quick Installation
 
-### 1. Giám sát & Chẩn đoán (Monitoring)
-Hệ thống đã chuẩn hóa dữ liệu trả về qua các callback để Frontend dễ dàng hiển thị trạng thái mạng.
+This is an internal SDK. Build from source:
 
-#### `onNetworkQuality`
-Trả về chất lượng mạng (Uplink/Downlink) theo thang điểm từ 1-6.
-- 1: Tuyệt vời
-- 2: Tốt
-- 3: Bình thường
-- 4: Kém
-- 5: Rất kém
-- 6: Mất kết nối
-
-```typescript
-rtc.onNetworkQuality = (uplink, downlink) => {
-  console.log(`Chất lượng mạng: Up=${uplink}, Down=${downlink}`);
-};
+```bash
+npm install
+npm run build
 ```
 
-#### `onRunInformation`
-Trả về thông số chi tiết về luồng Media (RTT, Loss Rate, Bitrate, Resolution...).
+## Basic Example
 
 ```typescript
-rtc.onRunInformation = (stats) => {
-  const { videoStats, audioStats } = stats;
-  console.log(`Video RTT: ${videoStats.rtt}ms, Loss: ${videoStats.videoLossRate * 100}%`);
-};
+import { ArmcloudEngine } from "./dist/index.es.js";
+
+const engine = new ArmcloudEngine({
+  token: "YOUR_TOKEN",
+  baseUrl: "https://api.example.com",
+  viewId: "cloud-phone-view",
+  deviceInfo: {
+    padCode: "AC22030020000",
+    userId: "user-unique-id",
+    videoStream: { resolution: 12, frameRate: 2, bitrate: 3 },
+    mediaType: 3,
+    keyboard: "pad"
+  },
+  callbacks: {
+    onInit: (res) => { if (res.code === 0) engine.start(); },
+    onConnectSuccess: () => console.log("Connected!")
+  }
+});
 ```
 
-### 2. Xử lý lỗi & Tự động kết nối lại
-- Engine `WebRtc` (P2P) hiện đã hỗ trợ tự động khởi tạo lại ICE (ICE Restart) khi phát hiện mất kết nối transient.
-- Callback `onConnectionStateChanged` cung cấp trạng thái kết nối chuẩn hóa cho cả 3 Engine.
+## Documentation
 
-```typescript
-rtc.onConnectionStateChanged = ({ state, msg }) => {
-  // state: 0-Connecting, 1-Disconnected, 2-Connecting, 3-Connected, 4-Reconnecting, 5-Reconnected, 6-Failed
-  console.log(`Trạng thái kết nối: ${state} (${msg})`);
-};
-```
+Full documentation is available in the [`docs/`](./docs) folder:
 
-### 3. Tối ưu hóa độ trễ
-- Tích hợp `iceCandidatePoolSize` để giảm thời gian thiết lập kết nối WebRTC.
-- Sử dụng `playoutDelayHint: 0` để giảm thiểu độ trễ Jitter Buffer trong trình duyệt (Chrome).
-- Cơ chế ABR tự động điều chỉnh Bitrate dựa trên RTT và Loss Rate.
+- [🚀 Getting Started](./docs/getting-started.md): Installation and first connection.
+- [📚 API Reference](./docs/api-reference.md): Classes, methods, and events.
+- [🛠 Advanced Usage](./docs/advanced-usage.md): ADB, Group Control, and Performance Monitoring.
+- [🏗 Architecture](./docs/architecture.md): Internal design and project structure.
 
-## Cài đặt & Sử dụng
+## Features
 
-Xem chi tiết trong mã nguồn `src/index.ts` và các ví dụ kiểm thử trong `test/`.
+- **Multi-Engine**: Seamlessly switches between Volcengine (CustomRtc), Native P2P, and Tencent (TcgRtc).
+- **Control**: Full touch, keyboard, and ADB command support.
+- **Diagnostics**: Real-time network quality and stream performance reporting.
+- **Advanced**: GPS spoofing, clipboard sync, and camera injection.
