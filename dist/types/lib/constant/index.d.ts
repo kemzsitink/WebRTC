@@ -112,3 +112,8 @@ export declare const PROGRESS_INFO: {
         msg: string;
     };
 };
+export declare enum StreamType {
+    CUSTOM = 1,
+    WEBRTC = 2,
+    TCGRTC = 3
+}

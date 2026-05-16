@@ -1,3 +1,4 @@
+import { Logger } from "../../utils/logger";
 import { type IRTCEngine, StreamIndex } from "@volcengine/rtc";
 
 import customGroupRtc from "./customGroupRtc";
@@ -160,7 +161,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
     };
     const frameRate: number = 15;
     const maxKbps: number = 4000;
-    console.log("设置编码器参数", width, height, frameRate, maxKbps);
+    Logger.info("设置编码器参数", width, height, frameRate, maxKbps);
     this.engine?.setVideoEncoderConfig({
       width,
       height,
@@ -175,16 +176,21 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
 
     this.engine = VERTC.createEngine(this.options.appId);
 
-    VERTC.setParameter("ICE_CONFIG_REQUEST_URLS", [
-      "rtcg-access.volcvideos.com",
-      "rtcg-access-va.volcvideos.com",
-      "rtcg-access-fr.volcvideos.com",
-      "rtcg-access-sg.volcvideos.com",
-      "rtc-access-ag.bytedance.com",
-      "rtc-access.bytedance.com",
-      "rtc-access2-hl.bytedance.com",
-      "rtcg-access.bytevcloud.com",
-    ]);
+    VERTC.setParameter(
+      "ICE_CONFIG_REQUEST_URLS",
+      this.options.iceServersUrls && this.options.iceServersUrls.length > 0 
+        ? this.options.iceServersUrls 
+        : [
+            "rtcg-access.volcvideos.com",
+            "rtcg-access-va.volcvideos.com",
+            "rtcg-access-fr.volcvideos.com",
+            "rtcg-access-sg.volcvideos.com",
+            "rtc-access-ag.bytedance.com",
+            "rtc-access.bytedance.com",
+            "rtc-access2-hl.bytedance.com",
+            "rtcg-access.bytevcloud.com",
+          ]
+    );
 
     this.engine?.on(VERTC.events.onLocalVideoSizeChanged, (resolution) => {
       const { width, height } = resolution?.info || {};
@@ -835,7 +841,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
               coords: that.touchConfig.coords,
             };
             const message = JSON.stringify(touchConfig);
-            // console.log('2222触摸中', message)
+            // Logger.info('2222触摸中', message)
             that.sendUserMessage(userId, message);
           });
           // 触摸结束
@@ -852,7 +858,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
             } else {
               that.touchConfig.action = 1; // 抬起
               const message = JSON.stringify(that.touchConfig);
-              // console.log("触摸结束", message);
+              // Logger.info("触摸结束", message);
               that.sendUserMessage(userId, message);
             }
           });
@@ -888,7 +894,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
         // that.engine?.on(
         //   VERTC.events.onAudioDeviceStateChanged,
         //   debounce((e) => {
-        //     console.log("音频设备状态变化", e);
+        //     Logger.info("音频设备状态变化", e);
         //     if (e.deviceState == "active" && this.enableMicrophone) {
         //       this.microphoneInject();
         //     }
@@ -902,12 +908,12 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
           result: 0,
         });
         this.metricsReporter?.instant(ReportEventType.FIRST_FRAME);
-        console.log("进房错误", error);
+        Logger.info("进房错误", error);
         this.callbacks.onConnectFail?.({ code: error.code, msg: error.message });
       });
   }
   startCV() {
-    console.log("startCV", this.videoDomId)
+    Logger.info("startCV", this.videoDomId)
     this._listenKeyboardShortcut = this.listenKeyboardShortcut.bind(this)
     this.disableKeyboardShortcut()
     this.enableKeyboardShortcut()
@@ -929,7 +935,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
     document.addEventListener("keydown", this._listenKeyboardShortcut)
   }
   disableKeyboardShortcut(){
-    console.log("disableKeyboardShortcut")
+    Logger.info("disableKeyboardShortcut")
     document.removeEventListener("keydown", this._listenKeyboardShortcut)
   }
   /**
@@ -955,11 +961,11 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
   /** 远端用户离开房间 */
   onUserLeave() {
     this.engine?.on(VERTC.events.onConnectionStateChanged, (e) => {
-      console.log("onConnectionStateChanged ", e)
+      Logger.info("onConnectionStateChanged ", e)
         // this.disableKeyboardShortcut()
     })
     this.engine?.on(VERTC.events.onUserLeave, (res) => {
-      console.log("onUserLeave ", res)
+      Logger.info("onUserLeave ", res)
       this.disableKeyboardShortcut()
       this.callbacks.onUserLeave?.(res);
     });
@@ -1256,7 +1262,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
             msgData.width == this.remoteResolution.width &&
             msgData.height == this.remoteResolution.height
           ) {
-            console.log("宽高没变，不重新绘制页面", this.remoteUserId);
+            Logger.info("宽高没变，不重新绘制页面", this.remoteUserId);
             return false;
           }
 
@@ -1786,7 +1792,7 @@ export default class CustomRtc extends BaseRtc implements IRtcInstance {
     };
     const userId = this.options.clientId;
     const message = JSON.stringify(messageObj);
-    console.log("手动传入经纬度", message);
+    Logger.info("手动传入经纬度", message);
     this.sendUserMessage(userId, message);
   }
 

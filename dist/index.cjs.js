@@ -44,6 +44,28 @@ function generateUUID() {
     });
 }
 
+class Logger {
+    static isLogEnabled = true;
+    static setEnable(enable) {
+        this.isLogEnabled = enable;
+    }
+    static info(message, ...optionalParams) {
+        if (this.isLogEnabled) {
+            console.log(`[ArmcloudRTC Info]:`, message, ...optionalParams);
+        }
+    }
+    static warn(message, ...optionalParams) {
+        if (this.isLogEnabled) {
+            console.warn(`[ArmcloudRTC Warn]:`, message, ...optionalParams);
+        }
+    }
+    static error(message, ...optionalParams) {
+        if (this.isLogEnabled) {
+            console.error(`[ArmcloudRTC Error]:`, message, ...optionalParams);
+        }
+    }
+}
+
 class ShakeSimulator {
     isRunning;
     intervalId;
@@ -215,6 +237,12 @@ const PROGRESS_INFO = {
         msg: "VIDEO第一帧渲染成功",
     },
 };
+exports.StreamType = void 0;
+(function (StreamType) {
+    StreamType[StreamType["CUSTOM"] = 1] = "CUSTOM";
+    StreamType[StreamType["WEBRTC"] = 2] = "WEBRTC";
+    StreamType[StreamType["TCGRTC"] = 3] = "TCGRTC";
+})(exports.StreamType || (exports.StreamType = {}));
 
 const blobToText = (blob) => {
     return new Promise((resolve, reject) => {
@@ -667,6 +695,38 @@ class BaseRtc {
     isGroupControl = false;
     inputService;
     groupRtc = null;
+    promiseMap = {
+        streamStatus: {
+            resolve: () => { },
+            reject: () => { },
+        },
+        injectStatus: {
+            resolve: null,
+            reject: null,
+        },
+    };
+    touchConfig = {
+        action: 0,
+        widthPixels: document.body.clientWidth,
+        heightPixels: document.body.clientHeight,
+        pointCount: 1,
+        touchType: exports.TouchType.GESTURE,
+        properties: [],
+        coords: [],
+    };
+    autoRecoveryTimer = null;
+    enterkeyhintObj = {
+        2: "go",
+        3: "search",
+        4: "send",
+        5: "next",
+        6: "done",
+        7: "previous",
+    };
+    remoteInputState = {
+        isOpen: false,
+        imeOptions: "",
+    };
     constructor(initDomId, options, callbacks) {
         this.initDomId = initDomId;
         this.options = options;
@@ -700,6 +760,33 @@ class BaseRtc {
             content: typeof content === "string" ? content : JSON.stringify(content),
         });
     }
+    setMicrophone(val) {
+        this.enableMicrophone = val;
+    }
+    setCamera(val) {
+        this.enableCamera = val;
+    }
+    setAutoRecycleTime(second) {
+        this.options.autoRecoveryTime = second;
+    }
+    getAutoRecycleTime() {
+        return this.options.autoRecoveryTime;
+    }
+    triggerRecoveryTimeCallback() {
+        if (this.options.disable ||
+            !this.options.autoRecoveryTime ||
+            this.isCameraInject ||
+            this.isMicrophoneInject) {
+            return;
+        }
+        if (this.autoRecoveryTimer) {
+            clearTimeout(this.autoRecoveryTimer);
+        }
+        this.autoRecoveryTimer = setTimeout(() => {
+            this.stop();
+            this.callbacks.onAutoRecoveryTime?.();
+        }, this.options.autoRecoveryTime * 1000);
+    }
 }
 
 class WebRtc extends BaseRtc {
@@ -712,17 +799,6 @@ class WebRtc extends BaseRtc {
     isVideoFirstFrame = false;
     // 群控同步
     groupControlSync = true;
-    // 当前推流状态promise 缓存
-    promiseMap = {
-        streamStatus: {
-            resolve: () => { },
-            reject: () => { },
-        },
-        injectStatus: {
-            resolve: null,
-            reject: null,
-        },
-    };
     remoteResolution = {
         width: 0,
         height: 0,
@@ -738,39 +814,10 @@ class WebRtc extends BaseRtc {
     retryTime;
     remotePc = null;
     dataChannel;
-    // 回收时间定时器
-    autoRecoveryTimer = null;
     // 运行信息定时器
     runInfoTimer = null;
-    // 触摸信息
-    touchConfig = {
-        action: 0, // 0 按下 1 抬起 2 触摸中
-        widthPixels: document.body.clientWidth,
-        heightPixels: document.body.clientHeight,
-        pointCount: 1, // 手指操作数量
-        touchType: exports.TouchType.GESTURE,
-        properties: [], // 手指id， toolType: 1写死
-        coords: [], // 操作坐标 pressure: 1.0, size: 1.0,写死
-    };
     // 触摸坐标信息
     touchInfo = generateTouchCoord();
-    /**
-     * 安卓对应回车值
-     * go：前往 2
-     * search：搜索 3
-     * send：发送 4
-     * next：下一个 5
-     * done：完成 6
-     * previous：上一个 7
-     */
-    enterkeyhintObj = {
-        2: "go",
-        3: "search",
-        4: "send",
-        5: "next",
-        6: "done",
-        7: "previous",
-    };
     socketParams;
     // 回调函数集合
     videoStreams = [];
@@ -1070,7 +1117,7 @@ class WebRtc extends BaseRtc {
                 });
             }
             catch (error) {
-                console.log(`停止${type}轨道失败: ${error.message}`, "error");
+                Logger.info(`停止${type}轨道失败: ${error.message}`, "error");
             }
         }
         // 2. 停止流中的所有轨道
@@ -1081,7 +1128,7 @@ class WebRtc extends BaseRtc {
                         track.stop();
                     }
                     catch (error) {
-                        console.log(`停止流轨道失败: ${error.message}`, "error");
+                        Logger.info(`停止流轨道失败: ${error.message}`, "error");
                     }
                 });
             });
@@ -1121,7 +1168,7 @@ class WebRtc extends BaseRtc {
             return false;
         });
         validSenders.forEach((sender) => sender.replaceTrack(newTrack));
-        console.log(`${type}轨道已平滑切换`);
+        Logger.info(`${type}轨道已平滑切换`);
         // 3. 停止旧的轨道和流
         oldTracks.forEach((track) => track.stop());
         oldStreams.forEach((stream) => stream.getTracks().forEach((t) => t.stop()));
@@ -1283,7 +1330,7 @@ class WebRtc extends BaseRtc {
         };
         // ws连接关闭回调
         this.socket.onclose = (event) => {
-            console.log("WebSocket closed. Code: ", event.code, " Reason: ", event.reason);
+            Logger.info("WebSocket closed. Code: ", event.code, " Reason: ", event.reason);
             if (this.retryCount === this.retryCountBackup) {
                 this.callbacks?.onSocketCallback?.({
                     code: COMMON_CODE.CLOSE,
@@ -1664,7 +1711,7 @@ class WebRtc extends BaseRtc {
                     video.srcObject = videoMediaStream;
                     video.addEventListener("loadeddata", (event) => {
                         video.play().catch((err) => {
-                            console.error("播放失败:", err);
+                            Logger.error("播放失败:", err);
                             this.callbacks?.onAutoplayFailed?.({
                                 userId: this.options.userId,
                                 kind: "video",
@@ -1688,7 +1735,7 @@ class WebRtc extends BaseRtc {
                         audio.muted = !flag;
                         if (flag) {
                             audio.play().catch((err) => {
-                                console.error("播放失败:", err);
+                                Logger.error("播放失败:", err);
                                 this.callbacks?.onAutoplayFailed?.({
                                     userId: this.options.userId,
                                     kind: "audio",
@@ -1715,7 +1762,7 @@ class WebRtc extends BaseRtc {
                     break;
                 // 断开连接
                 case "disconnected":
-                    console.log("disconnected", this.remoteUserId);
+                    Logger.info("disconnected", this.remoteUserId);
                     this.callbacks?.onConnectFail?.({
                         code: COMMON_CODE.FAIL,
                         msg: "云机连接断开",
@@ -1725,13 +1772,13 @@ class WebRtc extends BaseRtc {
                     break;
                 // 连接关闭
                 case "closed":
-                    console.log("rtc closed");
+                    Logger.info("rtc closed");
                     this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_CLOSE);
                     this.stopOperations();
                     break;
                 // 连接失败
                 case "failed":
-                    console.log("failed", this.remoteUserId);
+                    Logger.info("failed", this.remoteUserId);
                     this.callbacks?.onConnectFail?.({
                         code: COMMON_CODE.FAIL,
                         msg: "云机连接失败",
@@ -1743,7 +1790,7 @@ class WebRtc extends BaseRtc {
         });
         // ICE协商错误
         // this.remotePc.addEventListener("icecandidateerror", (error) => {
-        //   console.log("icecandidateerror", error);
+        //   Logger.info("icecandidateerror", error);
         //   // ICE协商错误处理
         // });
     }
@@ -1783,7 +1830,7 @@ class WebRtc extends BaseRtc {
         });
         // 监听数据通道的状态变化和错误事件
         this.dataChannel.addEventListener("error", (error) => {
-            console.error("dataChannel error: ", error.errorDetail, error.message, error);
+            Logger.error("dataChannel error: ", error.errorDetail, error.message, error);
             clearInterval(this.runInfoTimer);
             this.callbacks?.onErrorMessage?.({
                 code: ERROR_CODE.DELAY,
@@ -1837,7 +1884,7 @@ class WebRtc extends BaseRtc {
             this.socket.send(offerMsgStr);
         }
         catch (error) {
-            console.error("发送webrtc offer失败:", error);
+            Logger.error("发送webrtc offer失败:", error);
         }
     }
     /** 接收remote offer */
@@ -1852,7 +1899,7 @@ class WebRtc extends BaseRtc {
             this.callbacks?.onProgress?.(PROGRESS_INFO.RECEIVE_OFFER);
         }
         catch (error) {
-            console.error("接收webrtc offer失败:", error);
+            Logger.error("接收webrtc offer失败:", error);
             this.callbacks?.onProgress?.(PROGRESS_INFO.RECEIVE_OFFER_ERR);
         }
     }
@@ -1975,7 +2022,7 @@ class WebRtc extends BaseRtc {
             await this.remotePc.setRemoteDescription(remoteSdp);
         }
         catch (error) {
-            console.log("接收remote answer失败:", error);
+            Logger.info("接收remote answer失败:", error);
             throw error;
         }
     }
@@ -2001,7 +2048,7 @@ class WebRtc extends BaseRtc {
                 }
             }
             catch (e) {
-                console.error("negotiateOffer error:", e);
+                Logger.error("negotiateOffer error:", e);
             }
             finally {
                 running = false;
@@ -2035,7 +2082,7 @@ class WebRtc extends BaseRtc {
             this.negotiateOffer();
         }
         catch (error) {
-            console.error("发送webrtc answer失败:", error);
+            Logger.error("发送webrtc answer失败:", error);
             this.callbacks?.onProgress?.(PROGRESS_INFO.SEND_ANSWER_ERR);
         }
     }
@@ -2196,7 +2243,7 @@ class WebRtc extends BaseRtc {
             this.callbacks?.onRunInformation?.(remoteStreamStats);
         }
         catch (error) {
-            console.error("获取统计信息时出错:", error);
+            Logger.error("获取统计信息时出错:", error);
             this.callbacks?.onErrorMessage?.({
                 code: ERROR_CODE.DATA_CHANNEL,
                 msg: error.message || error.name,
@@ -2211,23 +2258,6 @@ class WebRtc extends BaseRtc {
         return support.RTCPeerConnection && support.RTCDataChannel;
     }
     /** 触发无操作回收回调函数 */
-    triggerRecoveryTimeCallback() {
-        if (this.options.disable ||
-            !this.options.autoRecoveryTime ||
-            this.isCameraInject ||
-            this.isMicrophoneInject)
-            return;
-        if (this.autoRecoveryTimer) {
-            clearTimeout(this.autoRecoveryTimer);
-            this.autoRecoveryTimer = null;
-        }
-        if (this.stopOperation)
-            return;
-        this.autoRecoveryTimer = setTimeout(() => {
-            this.destroy();
-            this.callbacks?.onAutoRecoveryTime?.();
-        }, this.options.autoRecoveryTime * 1000);
-    }
     /** 发送消息 */
     async sendUserMessage(message, notRecycling = false) {
         if (!this.stopOperation) {
@@ -2239,16 +2269,6 @@ class WebRtc extends BaseRtc {
             if (this.dataChannel)
                 await this.dataChannel?.send(message);
         }
-    }
-    setMicrophone(val) {
-        if (this.stopOperation)
-            return;
-        this.enableMicrophone = val;
-    }
-    setCamera(val) {
-        if (this.stopOperation)
-            return;
-        this.enableCamera = val;
     }
     setMonitorOperation(isMonitor, forwardOff = true) { }
     /** 监听广播消息 */
@@ -2264,7 +2284,7 @@ class WebRtc extends BaseRtc {
                 const msg = JSON.parse(msgString || "{}");
                 if (["videoAndAudioControl" /* MessageKey.VIDEO_AND_AUDIO_CONTROL */].includes(msg.key)) {
                     const msgData = JSON.parse(msg.data) || {};
-                    console.log("VIDEO_AND_AUDIO_CONTROL", msg);
+                    Logger.info("VIDEO_AND_AUDIO_CONTROL", msg);
                     this.callbacks?.onMediaDevicesToggle?.({
                         type: "media",
                         enabled: msgData.isOpen,
@@ -2298,7 +2318,7 @@ class WebRtc extends BaseRtc {
                 }
                 if (["audioControl" /* MessageKey.AUDIO_CONTROL */].includes(msg.key)) {
                     const { isOpen } = JSON.parse(msg.data) || {};
-                    console.log("AUDIO_CONTROL", msg);
+                    Logger.info("AUDIO_CONTROL", msg);
                     if (isOpen) {
                         await this.microphoneInject();
                     }
@@ -2398,7 +2418,7 @@ class WebRtc extends BaseRtc {
                     // 设置回车按钮文案
                     const enterkeyhintText = this.enterkeyhintObj[msgData.imeOptions];
                     this.inputService.getInputElement()?.setAttribute("enterkeyhint", enterkeyhintText);
-                    console.log("inputStateIsOpen", inputStateIsOpen);
+                    Logger.info("inputStateIsOpen", inputStateIsOpen);
                     // 若存在inputElement，则判断当前本机键盘是否打开
                     if (this.inputService.getInputElement() &&
                         shouldHandleFocus &&
@@ -2959,7 +2979,7 @@ class CreateDataChannel {
                 try {
                     const message = JSON.parse(res);
                     const { key, data } = message;
-                    console.log("onMessage", message);
+                    Logger.info("onMessage", message);
                     switch (key) {
                         case "callBack" /* EventType.CALLBACK */:
                             this.emit("callBack" /* EventType.CALLBACK */, JSON.parse(data));
@@ -2974,7 +2994,7 @@ class CreateDataChannel {
                 }
                 catch (error) {
                     // 解析失败
-                    console.error("CustomDataChannel onMessage error", error);
+                    Logger.error("CustomDataChannel onMessage error", error);
                 }
             },
         });
@@ -3184,19 +3204,10 @@ class TcgRtc extends BaseRtc {
     groupDataChannel = null;
     // 注入推流状态
     groupPads = [];
-    promiseMap = {
-        streamStatus: {},
-        injectStatus: {},
-    };
     // 埋点定时器
     metricsTimer = null;
     // 旋转方向
     rotateType = undefined;
-    // 远端输入框状态
-    remoteInputState = {
-        isOpen: false,
-        imeOptions: "",
-    };
     // 上一次推流分辨率大小
     lastStreamResolution = {
         width: 0,
@@ -3208,23 +3219,6 @@ class TcgRtc extends BaseRtc {
         height: 0,
         orientation: "portrait",
         degree: 0,
-    };
-    /**
-     * 安卓对应回车值
-     * go：前往 2
-     * search：搜索 3
-     * send：发送 4
-     * next：下一个 5
-     * done：完成 6
-     * previous：上一个 7
-     */
-    enterkeyhintObj = {
-        2: "go",
-        3: "search",
-        4: "send",
-        5: "next",
-        6: "done",
-        7: "previous",
     };
     constructor(initDomId, options, callbacks) {
         super(initDomId, options, callbacks);
@@ -3241,12 +3235,6 @@ class TcgRtc extends BaseRtc {
         this.TCGSDK.setPaste(false);
         // 设置视频dom
         this.createVideoContainer(this.options.padCode, this.options.masterIdPrefix);
-    }
-    setMicrophone(val) {
-        this.enableMicrophone = val;
-    }
-    setCamera(val) {
-        this.enableCamera = val;
     }
     /** 设置摄像头设备 */
     async setVideoDeviceId(val) {
@@ -3269,8 +3257,6 @@ class TcgRtc extends BaseRtc {
             isOpen: isMonitor,
         }), forwardOff);
     }
-    /** 触发无操作回收回调函数 */
-    triggerRecoveryTimeCallback() { }
     setVideoEncoder(width, height) {
         this.TCGSDK.setRemoteDesktopResolution({ width, height });
     }
@@ -3552,18 +3538,6 @@ class TcgRtc extends BaseRtc {
             RTCDataChannel: typeof RTCDataChannel !== "undefined"};
         return support.RTCPeerConnection && support.RTCDataChannel;
     }
-    /**
-     * 设置无操作回收时间
-     * @param second 秒 默认300s,最大7200s
-     */
-    setAutoRecycleTime(second) {
-        // 设置过期时间，单位为毫秒
-        this.options.autoRecoveryTime = second;
-    }
-    /** 获取无操作回收时间 */
-    getAutoRecycleTime() {
-        return this.options.autoRecoveryTime;
-    }
     /** 停止或开启群控同步 */
     toggleGroupControlSync(flag = true) {
         if (!this.isGroupControl)
@@ -3685,7 +3659,7 @@ class TcgRtc extends BaseRtc {
         }
         // 根据云端分辨率比例修正目标分辨率
         let { width: newWidth, height: newHeight } = this.matchResolution(width, height);
-        console.log(`sdk setupStreamResolution: newWidth=${newWidth} newHeight=${newHeight}`);
+        Logger.info(`sdk setupStreamResolution: newWidth=${newWidth} newHeight=${newHeight}`);
         // 设置推流分辨率
         this.TCGSDK.setStreamProfile({
             video_width: newWidth,
@@ -3718,7 +3692,7 @@ class TcgRtc extends BaseRtc {
             await this.TCGSDK.createShadowSocket({ token: roomToken });
         }
         catch (error) {
-            console.error("createShadowSocket error:", error);
+            Logger.error("createShadowSocket error:", error);
         }
         this.TCGSDK.init({
             mount: this.videoDomId,
@@ -3797,7 +3771,7 @@ class TcgRtc extends BaseRtc {
             },
             onConfigurationChange: (response) => {
                 let { orientation, deg, width: remoteWidth, height: remoteHeight, } = response.screen_config;
-                console.log(`sdk onConfigurationChange: screen_config=${JSON.stringify(response.screen_config)}`);
+                Logger.info(`sdk onConfigurationChange: screen_config=${JSON.stringify(response.screen_config)}`);
                 this.remoteDesktopResolution = {
                     width: remoteWidth,
                     height: remoteHeight,
@@ -3957,7 +3931,7 @@ class TcgRtc extends BaseRtc {
                 degree = orientationIsLandscape ? 0 : 270;
             }
         }
-        console.log(`setPhoneRotation:  sdk type=${type} remoteIsLandscape=${remoteIsLandscape} degree=${degree} remoteDesktopResolution=${JSON.stringify(this.remoteDesktopResolution)}`);
+        Logger.info(`setPhoneRotation:  sdk type=${type} remoteIsLandscape=${remoteIsLandscape} degree=${degree} remoteDesktopResolution=${JSON.stringify(this.remoteDesktopResolution)}`);
         this.screenRotation(type, degree);
     }
     /** 触发 change rotate 事件 */
@@ -3992,11 +3966,11 @@ class TcgRtc extends BaseRtc {
      */
     async screenRotation(type, degree) {
         const optionsRotateType = this.options.rotateType;
-        // console.log(`sdk screenRotation: optionsRotateType=${optionsRotateType} type=${type} degree=${degree}`);
+        // Logger.info(`sdk screenRotation: optionsRotateType=${optionsRotateType} type=${type} degree=${degree}`);
         if (optionsRotateType !== undefined) {
             type = optionsRotateType;
             degree = optionsRotateType === exports.RotateDirection.LANDSCAPE ? 270 : 0;
-            // console.log(`sdk screenRotation: new-> type=${type} degree=${degree}`);
+            // Logger.info(`sdk screenRotation: new-> type=${type} degree=${degree}`);
         }
         const remoteIsLandscape = this.remoteDesktopResolution.width > this.remoteDesktopResolution.height;
         if (isTouchDevice() || isMobile()) {
@@ -4008,12 +3982,12 @@ class TcgRtc extends BaseRtc {
             else if (this.remoteDesktopResolution.degree == 90 && this.remoteDesktopResolution.orientation == "landscape") {
                 degree = 90;
             }
-            // console.log(`sdk screenRotation: mobile-> type=${type} degree=${degree}`);
+            // Logger.info(`sdk screenRotation: mobile-> type=${type} degree=${degree}`);
         }
         if (!remoteIsLandscape && this.remoteDesktopResolution.degree == 90 && this.remoteDesktopResolution.orientation == "landscape") {
             degree = type == exports.RotateDirection.LANDSCAPE ? 0 : 90;
         }
-        console.log(`sdk screenRotation: type=${type} degree=${degree}`);
+        Logger.info(`sdk screenRotation: type=${type} degree=${degree}`);
         try {
             await this.callbacks?.onBeforeRotate?.(type);
         }
@@ -4278,7 +4252,7 @@ class TcgRtc extends BaseRtc {
                 handler(data);
             }
             else {
-                console.debug(`[dataChannel] Unknown key: ${this.options.clientId}`, key, "raw:", data);
+                Logger.info(`[dataChannel] Unknown key: ${this.options.clientId}`, key, "raw:", data);
             }
         };
         const callbackDispatch = (res) => {
@@ -4288,7 +4262,7 @@ class TcgRtc extends BaseRtc {
                 handler(data);
             }
             else {
-                console.debug(`[dataChannel] Unknown type: ${this.options.clientId}`, type, "raw:", data);
+                Logger.info(`[dataChannel] Unknown type: ${this.options.clientId}`, type, "raw:", data);
             }
         };
         this.dataChannel
@@ -4976,16 +4950,6 @@ class CustomRtc extends BaseRtc {
         width: 0,
         height: 0,
     };
-    // 触摸信息
-    touchConfig = {
-        action: 0, // 0 按下 1 抬起 2 触摸中
-        widthPixels: document.body.clientWidth,
-        heightPixels: document.body.clientHeight,
-        pointCount: 1, // 手指操作数量
-        touchType: "gesture",
-        properties: [], // 手指id， toolType: 1写死
-        coords: [], // 操作坐标 pressure: 1.0, size: 1.0,写死
-    };
     // 键盘快捷键监听函数
     _listenKeyboardShortcut = () => { };
     // 云手机容器是否处于活跃交互状态
@@ -4998,42 +4962,12 @@ class CustomRtc extends BaseRtc {
     groupControlSync = true;
     engine = null;
     groupEngine = null;
-    // 当前推流状态promise 缓存
-    promiseMap = {
-        streamStatus: {
-            resolve: () => { },
-            reject: () => { },
-        },
-        injectStatus: {
-            resolve: null,
-            reject: null,
-        },
-    };
     roomMessage = {};
-    // 回收时间定时器
-    autoRecoveryTimer = null;
     isFirstFrame = false;
     firstFrameCount = 0;
     rotation = 0;
     // 埋点定时器
     metricsTimer = null;
-    /**
-     * 安卓对应回车值
-     * go：前往 2
-     * search：搜索 3
-     * send：发送 4
-     * next：下一个 5
-     * done：完成 6
-     * previous：上一个 7
-     */
-    enterkeyhintObj = {
-        2: "go",
-        3: "search",
-        4: "send",
-        5: "next",
-        6: "done",
-        7: "previous",
-    };
     rotateType = 0;
     // 摄像头分辨率信息
     cameraResolution = {
@@ -5060,12 +4994,6 @@ class CustomRtc extends BaseRtc {
     isSupported() {
         return VERTC.isSupported();
     }
-    setMicrophone(val) {
-        this.enableMicrophone = val;
-    }
-    setCamera(val) {
-        this.enableCamera = val;
-    }
     /** 设置摄像头设备 */
     async setVideoDeviceId(val) {
         this.videoDeviceId = val;
@@ -5088,24 +5016,6 @@ class CustomRtc extends BaseRtc {
             isOpen: isMonitor,
         }), forwardOff);
     }
-    /** 触发无操作回收回调函数 */
-    triggerRecoveryTimeCallback() {
-        if (this.options.disable ||
-            !this.options.autoRecoveryTime ||
-            this.isCameraInject ||
-            this.isMicrophoneInject) {
-            return;
-        }
-        if (this.autoRecoveryTimer) {
-            // console.log("清除计时器");
-            clearTimeout(this.autoRecoveryTimer);
-        }
-        this.autoRecoveryTimer = setTimeout(() => {
-            console.log("触发无操作回收了");
-            this.stop();
-            this.callbacks.onAutoRecoveryTime?.();
-        }, this.options.autoRecoveryTime * 1000);
-    }
     setVideoEncoder(width, height) {
         if (!width || !height) {
             return;
@@ -5116,7 +5026,7 @@ class CustomRtc extends BaseRtc {
         };
         const frameRate = 15;
         const maxKbps = 4000;
-        console.log("设置编码器参数", width, height, frameRate, maxKbps);
+        Logger.info("设置编码器参数", width, height, frameRate, maxKbps);
         this.engine?.setVideoEncoderConfig({
             width,
             height,
@@ -5130,16 +5040,18 @@ class CustomRtc extends BaseRtc {
             return;
         this.inputService.initIme(this.initDomId, { disableLocalIME: this.options.disableLocalIME });
         this.engine = VERTC.createEngine(this.options.appId);
-        VERTC.setParameter("ICE_CONFIG_REQUEST_URLS", [
-            "rtcg-access.volcvideos.com",
-            "rtcg-access-va.volcvideos.com",
-            "rtcg-access-fr.volcvideos.com",
-            "rtcg-access-sg.volcvideos.com",
-            "rtc-access-ag.bytedance.com",
-            "rtc-access.bytedance.com",
-            "rtc-access2-hl.bytedance.com",
-            "rtcg-access.bytevcloud.com",
-        ]);
+        VERTC.setParameter("ICE_CONFIG_REQUEST_URLS", this.options.iceServersUrls && this.options.iceServersUrls.length > 0
+            ? this.options.iceServersUrls
+            : [
+                "rtcg-access.volcvideos.com",
+                "rtcg-access-va.volcvideos.com",
+                "rtcg-access-fr.volcvideos.com",
+                "rtcg-access-sg.volcvideos.com",
+                "rtc-access-ag.bytedance.com",
+                "rtc-access.bytedance.com",
+                "rtc-access2-hl.bytedance.com",
+                "rtcg-access.bytevcloud.com",
+            ]);
         this.engine?.on(VERTC.events.onLocalVideoSizeChanged, (resolution) => {
             const { width, height } = resolution?.info || {};
             this.setVideoEncoder(width, height);
@@ -5678,7 +5590,7 @@ class CustomRtc extends BaseRtc {
                         coords: that.touchConfig.coords,
                     };
                     const message = JSON.stringify(touchConfig);
-                    // console.log('2222触摸中', message)
+                    // Logger.info('2222触摸中', message)
                     that.sendUserMessage(userId, message);
                 });
                 // 触摸结束
@@ -5697,7 +5609,7 @@ class CustomRtc extends BaseRtc {
                     else {
                         that.touchConfig.action = 1; // 抬起
                         const message = JSON.stringify(that.touchConfig);
-                        // console.log("触摸结束", message);
+                        // Logger.info("触摸结束", message);
                         that.sendUserMessage(userId, message);
                     }
                 });
@@ -5729,7 +5641,7 @@ class CustomRtc extends BaseRtc {
             // that.engine?.on(
             //   VERTC.events.onAudioDeviceStateChanged,
             //   debounce((e) => {
-            //     console.log("音频设备状态变化", e);
+            //     Logger.info("音频设备状态变化", e);
             //     if (e.deviceState == "active" && this.enableMicrophone) {
             //       this.microphoneInject();
             //     }
@@ -5743,12 +5655,12 @@ class CustomRtc extends BaseRtc {
                 result: 0,
             });
             this.metricsReporter?.instant("FirstFrame" /* ReportEventType.FIRST_FRAME */);
-            console.log("进房错误", error);
+            Logger.info("进房错误", error);
             this.callbacks.onConnectFail?.({ code: error.code, msg: error.message });
         });
     }
     startCV() {
-        console.log("startCV", this.videoDomId);
+        Logger.info("startCV", this.videoDomId);
         this._listenKeyboardShortcut = this.listenKeyboardShortcut.bind(this);
         this.disableKeyboardShortcut();
         this.enableKeyboardShortcut();
@@ -5773,7 +5685,7 @@ class CustomRtc extends BaseRtc {
         document.addEventListener("keydown", this._listenKeyboardShortcut);
     }
     disableKeyboardShortcut() {
-        console.log("disableKeyboardShortcut");
+        Logger.info("disableKeyboardShortcut");
         document.removeEventListener("keydown", this._listenKeyboardShortcut);
     }
     /**
@@ -5799,11 +5711,11 @@ class CustomRtc extends BaseRtc {
     /** 远端用户离开房间 */
     onUserLeave() {
         this.engine?.on(VERTC.events.onConnectionStateChanged, (e) => {
-            console.log("onConnectionStateChanged ", e);
+            Logger.info("onConnectionStateChanged ", e);
             // this.disableKeyboardShortcut()
         });
         this.engine?.on(VERTC.events.onUserLeave, (res) => {
-            console.log("onUserLeave ", res);
+            Logger.info("onUserLeave ", res);
             this.disableKeyboardShortcut();
             this.callbacks.onUserLeave?.(res);
         });
@@ -6051,7 +5963,7 @@ class CustomRtc extends BaseRtc {
                     // 若宽高没变，则不重新绘制页面
                     if (msgData.width == this.remoteResolution.width &&
                         msgData.height == this.remoteResolution.height) {
-                        console.log("宽高没变，不重新绘制页面", this.remoteUserId);
+                        Logger.info("宽高没变，不重新绘制页面", this.remoteUserId);
                         return false;
                     }
                     this.initRotateScreen(msgData.width, msgData.height);
@@ -6524,7 +6436,7 @@ class CustomRtc extends BaseRtc {
         };
         const userId = this.options.clientId;
         const message = JSON.stringify(messageObj);
-        console.log("手动传入经纬度", message);
+        Logger.info("手动传入经纬度", message);
         this.sendUserMessage(userId, message);
     }
     /** 停止或开启群控同步 */
@@ -6700,18 +6612,18 @@ class CustomRtc extends BaseRtc {
 class RtcFactory {
     /**
      * Tạo instance RTC dựa trên streamType
-     * @param streamType 1: WebRtc, 2: TcgRtc, 3: CustomRtc
+     * @param streamType 1: CustomRtc (Volcengine), 2: WebRtc (P2P), 3: TcgRtc (Tencent)
      * @param viewId View container ID
      * @param options Cấu hình RTC
      * @param callbacks Callbacks của SDK
      */
     static create(streamType, viewId, options, callbacks) {
         switch (streamType) {
-            case 1:
+            case exports.StreamType.CUSTOM:
                 return new CustomRtc(viewId, options, callbacks);
-            case 2:
+            case exports.StreamType.WEBRTC:
                 return new WebRtc(viewId, options, callbacks);
-            case 3:
+            case exports.StreamType.TCGRTC:
                 return new TcgRtc(viewId, options, callbacks);
             default:
                 throw new Error(`Unsupported streamType: ${streamType}`);

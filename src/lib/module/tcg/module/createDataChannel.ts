@@ -1,3 +1,4 @@
+import { Logger } from "../../../utils/logger";
 import { CloudGamingWebSDK } from "../core/index";
 import { TouchType } from "../../../types/webrtcType";
 
@@ -33,7 +34,7 @@ export default class CreateDataChannel {
             const message = JSON.parse(res);
             const { key, data } = message;
 
-            console.log("onMessage", message);
+            Logger.info("onMessage", message);
 
             switch (key) {
               case EventType.CALLBACK:
@@ -48,7 +49,7 @@ export default class CreateDataChannel {
             }
           } catch (error) {
             // 解析失败
-            console.error("CustomDataChannel onMessage error", error);
+            Logger.error("CustomDataChannel onMessage error", error);
           }
         },
       });

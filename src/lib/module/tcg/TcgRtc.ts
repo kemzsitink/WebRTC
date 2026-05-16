@@ -1,3 +1,4 @@
+import { Logger } from "../../utils/logger";
 import type {
     CustomDefinition,
     ArmcloudRtcOptions,
@@ -647,7 +648,7 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
             height
         );
 
-        console.log(`sdk setupStreamResolution: newWidth=${newWidth} newHeight=${newHeight}`);
+        Logger.info(`sdk setupStreamResolution: newWidth=${newWidth} newHeight=${newHeight}`);
 
         // 设置推流分辨率
         this.TCGSDK.setStreamProfile({
@@ -694,7 +695,7 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
         try {
             await this.TCGSDK.createShadowSocket({ token: roomToken });
         } catch (error) {
-            console.error("createShadowSocket error:", error);
+            Logger.error("createShadowSocket error:", error);
         }
 
         this.TCGSDK.init({
@@ -786,7 +787,7 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
                     width: remoteWidth,
                     height: remoteHeight,
                 } = response.screen_config;
-                console.log(`sdk onConfigurationChange: screen_config=${JSON.stringify(response.screen_config)}`);
+                Logger.info(`sdk onConfigurationChange: screen_config=${JSON.stringify(response.screen_config)}`);
 
                 this.remoteDesktopResolution = {
                     width: remoteWidth,
@@ -961,7 +962,7 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
                 degree = orientationIsLandscape ? 0 : 270;
             }
         }
-        console.log(`setPhoneRotation:  sdk type=${type} remoteIsLandscape=${remoteIsLandscape} degree=${degree} remoteDesktopResolution=${JSON.stringify(this.remoteDesktopResolution)}`);
+        Logger.info(`setPhoneRotation:  sdk type=${type} remoteIsLandscape=${remoteIsLandscape} degree=${degree} remoteDesktopResolution=${JSON.stringify(this.remoteDesktopResolution)}`);
         this.screenRotation(type, degree);
     }
 
@@ -1005,11 +1006,11 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
      */
     private async screenRotation(type: RotateDirection, degree: number) {
         const optionsRotateType = this.options.rotateType;
-        // console.log(`sdk screenRotation: optionsRotateType=${optionsRotateType} type=${type} degree=${degree}`);
+        // Logger.info(`sdk screenRotation: optionsRotateType=${optionsRotateType} type=${type} degree=${degree}`);
         if (optionsRotateType !== undefined) {
             type = optionsRotateType;
             degree = optionsRotateType === RotateDirection.LANDSCAPE ? 270 : 0;
-            // console.log(`sdk screenRotation: new-> type=${type} degree=${degree}`);
+            // Logger.info(`sdk screenRotation: new-> type=${type} degree=${degree}`);
         }
 
 
@@ -1023,14 +1024,14 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
                 degree = 90;
             }
 
-            // console.log(`sdk screenRotation: mobile-> type=${type} degree=${degree}`);
+            // Logger.info(`sdk screenRotation: mobile-> type=${type} degree=${degree}`);
         }
 
         if (!remoteIsLandscape && this.remoteDesktopResolution.degree == 90 && this.remoteDesktopResolution.orientation == "landscape") {
             degree = type == RotateDirection.LANDSCAPE ? 0 : 90;
         }
 
-        console.log(`sdk screenRotation: type=${type} degree=${degree}`);
+        Logger.info(`sdk screenRotation: type=${type} degree=${degree}`);
 
         try {
             await this.callbacks?.onBeforeRotate?.(type);
@@ -1349,7 +1350,7 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
             if (handler) {
                 handler(data);
             } else {
-                console.debug(
+                Logger.info(
                     `[dataChannel] Unknown key: ${this.options.clientId}`,
                     key,
                     "raw:",
@@ -1367,7 +1368,7 @@ export default class TcgRtc extends BaseRtc implements IRtcInstance {
             if (handler) {
                 handler(data);
             } else {
-                console.debug(
+                Logger.info(
                     `[dataChannel] Unknown type: ${this.options.clientId}`,
                     type,
                     "raw:",

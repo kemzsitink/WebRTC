@@ -360,6 +360,8 @@ export interface ArmcloudRtcOptions {
     accessInfo?: string;
     /** 请求 ID */
     requestId?: string;
+    /** ICE Server URLs for CustomRTC */
+    iceServersUrls?: string[];
 }
 export declare const enum EquipmentInfoType {
     APP = "app",

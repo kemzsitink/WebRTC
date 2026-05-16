@@ -74,3 +74,33 @@ export declare const enum MediaStreamType {
     VIDEO = "video",
     AUDIO = "audio"
 }
+export interface TouchConfig {
+    action: number;
+    widthPixels: number;
+    heightPixels: number;
+    pointCount: number;
+    touchType: TouchType | string;
+    properties: Array<{
+        id: number;
+        toolType: number;
+    }>;
+    coords: Array<{
+        x: number;
+        y: number;
+        pressure?: number;
+        size?: number;
+    }>;
+    swipe?: number;
+}
+export interface PromiseMapEntry {
+    resolve: (value?: any) => void;
+    reject: (reason?: any) => void;
+}
+export interface PromiseMap {
+    streamStatus: PromiseMapEntry;
+    injectStatus: PromiseMapEntry;
+}
+export interface RemoteInputState {
+    isOpen: boolean;
+    imeOptions: string;
+}

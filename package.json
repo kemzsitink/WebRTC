@@ -9,7 +9,8 @@
   ],
   "scripts": {
     "build": "rollup -c",
-    "dev": "rollup -c -w"
+    "dev": "rollup -c -w",
+    "test": "jest"
   },
   "author": "ask",
   "license": "ISC",
@@ -27,7 +28,11 @@
     "@rollup/plugin-node-resolve": "^15.2.0",
     "@rollup/plugin-typescript": "^11.1.0",
     "@types/crypto-js": "^4.2.2",
+    "@types/jest": "^30.0.0",
+    "jest": "^30.4.2",
+    "jest-environment-jsdom": "^30.4.1",
     "rollup": "^4.20.0",
+    "ts-jest": "^29.4.9",
     "tslib": "^2.6.0",
     "typescript": "^5.5.0"
   },

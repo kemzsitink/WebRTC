@@ -1,3 +1,4 @@
+import { Logger } from "../../utils/logger";
 import Shake from "../../common/shake";
 import type { CustomDefinition } from "../../types/index";
 
@@ -458,7 +459,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
           track.stop();
         });
       } catch (error: any) {
-        console.log(`停止${type}轨道失败: ${error.message}`, "error");
+        Logger.info(`停止${type}轨道失败: ${error.message}`, "error");
       }
     }
 
@@ -469,7 +470,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
           try {
             track.stop();
           } catch (error: any) {
-            console.log(`停止流轨道失败: ${error.message}`, "error");
+            Logger.info(`停止流轨道失败: ${error.message}`, "error");
           }
         });
       });
@@ -521,7 +522,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
 
     validSenders.forEach((sender) => sender.replaceTrack(newTrack));
 
-    console.log(`${type}轨道已平滑切换`);
+    Logger.info(`${type}轨道已平滑切换`);
 
     // 3. 停止旧的轨道和流
     oldTracks.forEach((track) => track.stop());
@@ -722,7 +723,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
     };
     // ws连接关闭回调
     this.socket.onclose = (event: any) => {
-      console.log(
+      Logger.info(
         "WebSocket closed. Code: ",
         event.code,
         " Reason: ",
@@ -1161,7 +1162,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
           video.srcObject = videoMediaStream;
           video.addEventListener("loadeddata", (event: any) => {
             video.play().catch((err: any) => {
-              console.error("播放失败:", err);
+              Logger.error("播放失败:", err);
               this.callbacks?.onAutoplayFailed?.({
                 userId: this.options.userId,
                 kind: "video",
@@ -1191,7 +1192,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
             audio.muted = !flag;
             if (flag) {
               audio.play().catch((err: any) => {
-                console.error("播放失败:", err);
+                Logger.error("播放失败:", err);
                 this.callbacks?.onAutoplayFailed?.({
                   userId: this.options.userId,
                   kind: "audio",
@@ -1221,7 +1222,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
           break;
         // 断开连接
         case "disconnected":
-          console.log("disconnected", this.remoteUserId);
+          Logger.info("disconnected", this.remoteUserId);
 
           this.callbacks?.onConnectFail?.({
             code: COMMON_CODE.FAIL,
@@ -1234,7 +1235,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
           break;
         // 连接关闭
         case "closed":
-          console.log("rtc closed");
+          Logger.info("rtc closed");
 
           this.callbacks?.onProgress?.(PROGRESS_INFO.RTC_CLOSE);
 
@@ -1242,7 +1243,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
           break;
         // 连接失败
         case "failed":
-          console.log("failed", this.remoteUserId);
+          Logger.info("failed", this.remoteUserId);
 
           this.callbacks?.onConnectFail?.({
             code: COMMON_CODE.FAIL,
@@ -1257,7 +1258,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
 
     // ICE协商错误
     // this.remotePc.addEventListener("icecandidateerror", (error) => {
-    //   console.log("icecandidateerror", error);
+    //   Logger.info("icecandidateerror", error);
     //   // ICE协商错误处理
     // });
   }
@@ -1299,7 +1300,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
     });
     // 监听数据通道的状态变化和错误事件
     this.dataChannel.addEventListener("error", (error: any) => {
-      console.error(
+      Logger.error(
         "dataChannel error: ",
         error.errorDetail,
         error.message,
@@ -1368,7 +1369,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
       const offerMsgStr = JSON.stringify(offerMsg);
       this.socket.send(offerMsgStr);
     } catch (error) {
-      console.error("发送webrtc offer失败:", error);
+      Logger.error("发送webrtc offer失败:", error);
     }
   }
 
@@ -1385,7 +1386,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
 
       this.callbacks?.onProgress?.(PROGRESS_INFO.RECEIVE_OFFER);
     } catch (error) {
-      console.error("接收webrtc offer失败:", error);
+      Logger.error("接收webrtc offer失败:", error);
       this.callbacks?.onProgress?.(PROGRESS_INFO.RECEIVE_OFFER_ERR);
     }
   }
@@ -1526,7 +1527,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
       };
       await this.remotePc.setRemoteDescription(remoteSdp);
     } catch (error) {
-      console.log("接收remote answer失败:", error);
+      Logger.info("接收remote answer失败:", error);
       throw error;
     }
   }
@@ -1554,7 +1555,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
           await this.sendOffer();
         }
       } catch (e) {
-        console.error("negotiateOffer error:", e);
+        Logger.error("negotiateOffer error:", e);
       } finally {
         running = false;
       }
@@ -1589,7 +1590,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
       this.callbacks?.onProgress?.(PROGRESS_INFO.SEND_ANSWER);
       this.negotiateOffer();
     } catch (error) {
-      console.error("发送webrtc answer失败:", error);
+      Logger.error("发送webrtc answer失败:", error);
       this.callbacks?.onProgress?.(PROGRESS_INFO.SEND_ANSWER_ERR);
     }
   }
@@ -1767,7 +1768,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
       };
       this.callbacks?.onRunInformation?.(remoteStreamStats);
     } catch (error: any) {
-      console.error("获取统计信息时出错:", error);
+      Logger.error("获取统计信息时出错:", error);
       this.callbacks?.onErrorMessage?.({
         code: ERROR_CODE.DATA_CHANNEL,
         msg: error.message || error.name,
@@ -1820,7 +1821,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
 
         if ([MessageKey.VIDEO_AND_AUDIO_CONTROL].includes(msg.key)) {
           const msgData = JSON.parse(msg.data) || {};
-          console.log("VIDEO_AND_AUDIO_CONTROL", msg);
+          Logger.info("VIDEO_AND_AUDIO_CONTROL", msg);
           this.callbacks?.onMediaDevicesToggle?.({
             type: "media",
             enabled: msgData.isOpen,
@@ -1856,7 +1857,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
 
         if ([MessageKey.AUDIO_CONTROL].includes(msg.key)) {
           const { isOpen } = JSON.parse(msg.data) || {};
-          console.log("AUDIO_CONTROL", msg);
+          Logger.info("AUDIO_CONTROL", msg);
           if (isOpen) {
             await this.microphoneInject();
           } else {
@@ -1971,7 +1972,7 @@ export default class WebRtc extends BaseRtc implements IRtcInstance {
           // 设置回车按钮文案
           const enterkeyhintText = this.enterkeyhintObj[msgData.imeOptions];
           this.inputService.getInputElement()?.setAttribute("enterkeyhint", enterkeyhintText);
-          console.log("inputStateIsOpen", inputStateIsOpen);
+          Logger.info("inputStateIsOpen", inputStateIsOpen);
           // 若存在inputElement，则判断当前本机键盘是否打开
           if (
             this.inputService.getInputElement() &&
